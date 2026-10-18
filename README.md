@@ -4,6 +4,13 @@ Mirror an iPhone/iPad/Mac screen or AirPlay music to an Android TV device (built
 Google TV Streamer 4K, Android 14). Starting AirPlay wakes the device from standby, and HDMI-CEC
 turns on the TV and switches to its input. Turning the TV off ends the session.
 
+## Documentation
+
+- [Specification](docs/SPEC.md): what the receiver does, in detail
+- [Architecture decisions](docs/adr/README.md): why it works the way it does
+- [Roadmap](docs/ROADMAP.md): what's done and what's next
+- [AGENTS.md](AGENTS.md): context for development (also for AI agents)
+
 ## How it works
 
 - **Protocol:** [UxPlay](https://github.com/FDH2/UxPlay)'s `lib/` (pairing, FairPlay, RTSP, mirror and
