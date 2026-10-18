@@ -66,7 +66,6 @@ class AudioPlayer(private val sync: AvSync) {
         runCatching { aac?.flush() }
         aacPtsUs = 0
         framesWritten = 0
-        pipelineNs = -1
     }
 
     fun setVolume(gain: Float) = post {
@@ -100,9 +99,11 @@ class AudioPlayer(private val sync: AvSync) {
         val frames = length / BYTES_PER_FRAME
         if (ptsNs > 0) {
             val now = System.nanoTime()
+            if (!t.getTimestamp(timestamp)) stats.noTimestamp++
             val heardAtNs = nextFrameHeardAtNs(t, now)
             if (heardAtNs != null) {
-                if (pipelineNs >= 0) sync.reportAudio(now - ptsNs + pipelineNs)
+                val deviceNs = if (pipelineNs >= 0) pipelineNs else DEFAULT_DEVICE_LATENCY_NS
+                sync.reportAudio(now - ptsNs + deviceNs)
                 val error = heardAtNs - (ptsNs + sync.latencyNs) // > 0: late, < 0: early
                 stats.error(error)
                 when {
@@ -123,8 +124,6 @@ class AudioPlayer(private val sync: AvSync) {
                         stats.silenceFrames += silence
                     }
                 }
-            } else {
-                stats.noTimestamp++
             }
         }
         if (!checkWrite(t, t.write(pcm, offset, length))) return
@@ -146,7 +145,6 @@ class AudioPlayer(private val sync: AvSync) {
         t.flush()
         t.play()
         framesWritten = 0
-        pipelineNs = -1
     }
 
     /**
@@ -155,10 +153,16 @@ class AudioPlayer(private val sync: AvSync) {
      * what's still queued in the track, smoothed.
      */
     private fun nextFrameHeardAtNs(t: AudioTrack, now: Long): Long? {
-        if (!t.getTimestamp(timestamp) || timestamp.framePosition <= 0) return null
+        val queuedNs = (framesWritten - t.playbackHeadPosition.toLong()).coerceAtLeast(0) *
+            1_000_000_000L / SAMPLE_RATE
+        if (!t.getTimestamp(timestamp) || timestamp.framePosition <= 0) {
+            // A new track takes ~1 s to report timestamps. Estimate meanwhile from what's
+            // queued plus the device latency, instead of writing without timing (which
+            // overfills the queue and forces a resync once timestamps arrive).
+            return now + queuedNs + (if (pipelineNs >= 0) pipelineNs else DEFAULT_DEVICE_LATENCY_NS)
+        }
         val framesAhead = framesWritten - timestamp.framePosition
         val heardAt = timestamp.nanoTime + framesAhead * 1_000_000_000L / SAMPLE_RATE
-        val queuedNs = (framesWritten - t.playbackHeadPosition.toLong()) * 1_000_000_000L / SAMPLE_RATE
         val deviceNs = (heardAt - now - queuedNs).coerceAtLeast(0)
         if (pipelineNs < 0) {
             pipelineNs = deviceNs
@@ -191,7 +195,6 @@ class AudioPlayer(private val sync: AvSync) {
         val bufferBytes = if (lowLatency) maxOf(minBuffer * 2, SAMPLE_RATE * BYTES_PER_FRAME / 2)
         else SAMPLE_RATE * BYTES_PER_FRAME * 3
         framesWritten = 0
-        pipelineNs = -1
         return AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -329,6 +332,7 @@ class AudioPlayer(private val sync: AvSync) {
         // the track's own buffering keeps it ~20 ms behind, so don't drop before that.
         private const val MAX_LATE_NS = 45 * AvSync.MS
         private const val RESYNC_LATE_NS = 150 * AvSync.MS
+        private const val DEFAULT_DEVICE_LATENCY_NS = 200 * AvSync.MS // Streamer HDMI: ~210 ms
         private const val MAX_EARLY_NS = 15 * AvSync.MS
     }
 }
