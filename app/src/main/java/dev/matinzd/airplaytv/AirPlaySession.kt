@@ -29,11 +29,13 @@ object AirPlaySession {
         val pin: String? = null,
     ) {
         val showsVideo get() = mirroring || hlsVideo
-        val active get() = connections > 0 && (mirroring || hlsVideo || audioOnly || clientName != null || pin != null)
+        // A PIN stays up without a connection: the iPhone drops the connection that asked
+        // for it and reconnects once the code is typed.
+        val active get() = pin != null || connections > 0 && (mirroring || hlsVideo || audioOnly || clientName != null)
 
         fun endSession() = copy(
             clientName = null, clientModel = null, mirroring = false, hlsVideo = false, audioOnly = false,
-            videoWidth = 0, videoHeight = 0, title = null, artist = null, album = null, coverArt = null, pin = null,
+            videoWidth = 0, videoHeight = 0, title = null, artist = null, album = null, coverArt = null,
         )
     }
 

@@ -14,7 +14,9 @@ import android.content.pm.ServiceInfo
 import android.graphics.BitmapFactory
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
@@ -38,6 +40,7 @@ import java.util.concurrent.Executors
 class AirPlayService : Service(), AirPlayNative.Listener {
 
     private val worker = Executors.newSingleThreadExecutor()
+    private val main = Handler(Looper.getMainLooper())
     private lateinit var settings: ReceiverSettings
     private lateinit var advertiser: MdnsAdvertiser
     private lateinit var cpuLock: PowerManager.WakeLock
@@ -313,6 +316,8 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         Log.i(TAG, "showing a pairing PIN")
         AirPlaySession.update { it.copy(pin = pin) }
         TvWaker.wake(this)
+        // Hide it if nobody enters it.
+        main.postDelayed({ AirPlaySession.update { if (it.pin == pin) it.copy(pin = null) else it } }, PIN_TIMEOUT_MS)
     }
 
     override fun onRegisterClient(deviceId: String?, publicKey: String?, name: String?) {
@@ -326,6 +331,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         private const val TAG = "AirPlayService"
         private const val CHANNEL = "airplay_receiver"
         private const val NOTIFICATION_ID = 1
+        private const val PIN_TIMEOUT_MS = 60_000L
 
         const val ACTION_RESTART = "dev.matinzd.airplaytv.RESTART"
 
