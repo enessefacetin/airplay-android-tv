@@ -36,6 +36,7 @@ class AudioPlayer(private val sync: AvSync) {
     private var lowLatencyTrack = false
     private var aac: MediaCodec? = null
     private var aacPtsUs = 0L
+    private var lastAacInputPtsUs = 0L
     private var samplesPerFrame = 1024
     private var gain = 1f
     private val info = MediaCodec.BufferInfo()
@@ -115,7 +116,10 @@ class AudioPlayer(private val sync: AvSync) {
                 // What audio needs: how late it arrived + the track's natural buffering +
                 // device latency. Not the silence we inserted on purpose, and not time spent
                 // in our own queue (counting either would feed back on itself).
-                sync.reportAudio((arrivalNs - ptsNs) + (heardAtNs - now) - pendingSilenceNs(t))
+                val pendingNs = pendingSilenceNs(t)
+                val needNs = (arrivalNs - ptsNs) + (heardAtNs - now) - pendingNs
+                stats.need(arrivalNs - ptsNs, heardAtNs - now, pendingNs, needNs)
+                sync.reportAudio(needNs)
                 val error = heardAtNs - (ptsNs + sync.latencyNs) // > 0: late, < 0: early
                 stats.error(error)
                 when {
@@ -296,6 +300,7 @@ class AudioPlayer(private val sync: AvSync) {
                 codec.getInputBuffer(inIndex)?.apply { clear(); put(data) }
                 // The sender timestamp travels through the decoder; fall back to a counter.
                 val ptsUs = if (ptsNs > 0) ptsNs / 1000 else aacPtsUs
+                lastAacInputPtsUs = ptsUs
                 codec.queueInputBuffer(inIndex, 0, data.size, ptsUs, 0)
                 aacPtsUs = ptsUs + samplesPerFrame * 1_000_000L / SAMPLE_RATE
             }
@@ -305,6 +310,7 @@ class AudioPlayer(private val sync: AvSync) {
                 if (outIndex < 0) break
                 val out = codec.getOutputBuffer(outIndex)
                 if (out != null && info.size > 0) {
+                    stats.decoderPtsSkew(info.presentationTimeUs - lastAacInputPtsUs)
                     if (pcmScratch.size < info.size) pcmScratch = ByteArray(info.size)
                     out.position(info.offset)
                     out.get(pcmScratch, 0, info.size)
@@ -337,6 +343,21 @@ class AudioPlayer(private val sync: AvSync) {
         var silenceFrames = 0L
         var noTimestamp = 0
         var bogus = 0
+        private var needCount = 0
+        private var lateSum = 0L
+        private var aheadSum = 0L
+        private var pendingSum = 0L
+        private var needSum = 0L
+        private var skewCount = 0
+        private var skewSumUs = 0L
+
+        fun need(lateNs: Long, aheadNs: Long, pendingNs: Long, needNs: Long) {
+            needCount++; lateSum += lateNs; aheadSum += aheadNs; pendingSum += pendingNs; needSum += needNs
+        }
+
+        fun decoderPtsSkew(skewUs: Long) {
+            skewCount++; skewSumUs += skewUs
+        }
         private var count = 0
         private var errorSumNs = 0L
         private var windowStart = System.nanoTime()
@@ -357,8 +378,15 @@ class AudioPlayer(private val sync: AvSync) {
                 if (count > 0) errorSumNs / count / AvSync.MS else 0, dropped,
                 silenceFrames * 1000 / SAMPLE_RATE, noTimestamp, bogus, queuedMs, pipelineNs / AvSync.MS,
                 t?.playState ?: -1, queued.get()))
+            if (needCount > 0) {
+                val n = needCount
+                Log.i(TAG, "need avg %d ms = arrival-pts %d + heard-now %d - pending silence %d; decoder pts skew %s".format(
+                    needSum / n / AvSync.MS, lateSum / n / AvSync.MS, aheadSum / n / AvSync.MS, pendingSum / n / AvSync.MS,
+                    if (skewCount > 0) "${skewSumUs / skewCount / 1000} ms" else "-"))
+            }
             windowStart = System.nanoTime()
             count = 0; errorSumNs = 0; dropped = 0; silenceFrames = 0; noTimestamp = 0; bogus = 0
+            needCount = 0; lateSum = 0; aheadSum = 0; pendingSum = 0; needSum = 0; skewCount = 0; skewSumUs = 0
         }
     }
 
