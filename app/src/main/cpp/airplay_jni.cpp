@@ -436,6 +436,7 @@ void cb_audio_set_metadata(void *, const void *buffer, int buflen) {
    With a PIN required, a new device must enter a 4-digit code shown on the TV. It is
    then remembered (by its public key) and reconnects without a code. */
 void cb_register_client(void *, const char *device_id, const char *pk, const char *name) {
+    if (g_raop) raop_set_plist(g_raop, "pin", 0);  // paired: next device gets a new random PIN
     if (!g_listener || !pk) return;
     JNIEnv *env = get_env();
     if (!env) return;
@@ -463,6 +464,11 @@ const char *cb_passwd(void *, int *len) { *len = 0; return nullptr; }
 
 void cb_display_pin(void *, char *pin) {
     LOG_I("PIN requested by a new device");
+    // UxPlay's random PIN is single-use: the first pair-setup attempt clears it. iPhones
+    // first retry an old saved code by themselves, which used up the new one before the
+    // user could type it. Hold it as a fixed PIN (+10000) until pairing succeeds or the
+    // app resets it.
+    if (g_raop && pin) raop_set_plist(g_raop, "pin", atoi(pin) + 10000);
     if (!g_listener) return;
     JNIEnv *env = get_env();
     if (!env) return;
@@ -730,6 +736,12 @@ void native_stop(JNIEnv *env, jclass) {
     }
 }
 
+/* The shown PIN expired: the next pairing gets a new random one. */
+void native_reset_pin(JNIEnv *, jclass) {
+    std::lock_guard<std::mutex> lock(g_server_mutex);
+    if (g_raop) raop_set_plist(g_raop, "pin", 0);
+}
+
 /* Drop every client connection (e.g. the TV was turned off); the server keeps listening. */
 void native_disconnect(JNIEnv *, jclass) {
     if (g_open_connections > 0) restart_httpd(0);
@@ -762,6 +774,7 @@ const JNINativeMethod kMethods[] = {
      reinterpret_cast<void *>(native_start)},
     {"nativeStop", "()V", reinterpret_cast<void *>(native_stop)},
     {"nativeDisconnect", "()V", reinterpret_cast<void *>(native_disconnect)},
+    {"nativeResetPin", "()V", reinterpret_cast<void *>(native_reset_pin)},
     {"nativeServiceName", "(I)Ljava/lang/String;", reinterpret_cast<void *>(native_service_name)},
     {"nativeServicePort", "(I)I", reinterpret_cast<void *>(native_service_port)},
     {"nativeServiceTxt", "(I)[B", reinterpret_cast<void *>(native_service_txt)},

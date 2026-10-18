@@ -317,7 +317,12 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         AirPlaySession.update { it.copy(pin = pin) }
         TvWaker.wake(this)
         // Hide it if nobody enters it.
-        main.postDelayed({ AirPlaySession.update { if (it.pin == pin) it.copy(pin = null) else it } }, PIN_TIMEOUT_MS)
+        main.postDelayed({
+            if (AirPlaySession.state.pin == pin) {
+                worker.execute { AirPlayNative.nativeResetPin() }
+                AirPlaySession.update { if (it.pin == pin) it.copy(pin = null) else it }
+            }
+        }, PIN_TIMEOUT_MS)
     }
 
     override fun onRegisterClient(deviceId: String?, publicKey: String?, name: String?) {

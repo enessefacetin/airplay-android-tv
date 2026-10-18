@@ -96,6 +96,8 @@ object AirPlayNative {
     @JvmStatic external fun nativeStop()
     /** Drops all client connections; the server keeps listening. */
     @JvmStatic external fun nativeDisconnect()
+    /** Expire the PIN on screen; the next pairing gets a new one. */
+    @JvmStatic external fun nativeResetPin()
     @JvmStatic external fun nativeServiceName(service: Int): String?
     @JvmStatic external fun nativeServicePort(service: Int): Int
     @JvmStatic external fun nativeServiceTxt(service: Int): ByteArray?
