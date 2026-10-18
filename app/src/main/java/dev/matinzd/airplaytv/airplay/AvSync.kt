@@ -14,7 +14,7 @@ import android.util.Log
  * for AirPlay music, where a steady latency matters more than a low one. While
  * mirroring it can go negative (the anchor packet arrived late).
  */
-class AvSync {
+class AvSync(private val clock: () -> Long = System::nanoTime) {
     @Volatile
     var latencyNs = 0L
         private set
@@ -62,7 +62,7 @@ class AvSync {
     private fun report(window: Window, requiredNs: Long) {
         // Frames replayed from the keyframe cache, or a clock not yet in sync.
         if (requiredNs > MAX_LATENCY_NS || requiredNs < -MAX_EARLY_NS) return
-        val now = System.nanoTime()
+        val now = clock()
         window.add(requiredNs, now)
 
         if (decoupled && !audioOnly) {
