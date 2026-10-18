@@ -18,6 +18,10 @@ Status: accepted (2026-10-18)
   derived from it (1.2.3 = 10203), so every release installs over the last one.
 - Both workflows share `.github/actions/android-setup` (JDK 25, Gradle cache, NDK,
   CMake) and cache `third_party/openssl/` by the build script's hash and NDK version.
+- The signing key secrets are only in the `release` environment, which only `main`
+  can deploy to; only the APK job uses it. Pull request runs (even ones that edit the
+  workflows) can't read them, and there are no repository-level secrets. Workflow runs
+  for pull requests from outside contributors need approval.
 - Actions are pinned to their major versions; the repository setting "Allow GitHub
   Actions to create and approve pull requests" must be on for the release PR.
 - `scripts/dev.sh [--release]` builds, installs, runs `setup-device.sh`, opens the

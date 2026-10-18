@@ -76,7 +76,9 @@ commits on `main` keep a "release PR" up to date with the version bump and
 `CHANGELOG.md`. `feat` bumps the minor version, `fix`/`perf` the patch (before 1.0).
 Merging the release PR tags it and attaches a signed APK to the GitHub release. Don't
 edit the version by hand: it is the `x-release-please-version` line in
-`app/build.gradle.kts`, and `versionCode` is computed from it.
+`app/build.gradle.kts`, and `versionCode` is computed from it. The signing key secrets
+are only in the `release` environment (main only); never add repository-level secrets
+or use them in `ci.yml`.
 
 ## Working with the TV
 
