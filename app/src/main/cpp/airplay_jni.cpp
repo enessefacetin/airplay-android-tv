@@ -327,6 +327,19 @@ bool cb_check_register(void *, const char *) { return true; }
 const char *cb_passwd(void *, int *len) { *len = 0; return nullptr; }
 void cb_display_pin(void *, char *) {}
 void cb_export_dacp(void *, const char *, const char *) {}
+void cb_mirror_video_running(void *, bool) {}
+void cb_video_report_size(void *, float *, float *, float *, float *) {}
+void cb_audio_remote_control_id(void *, const char *, const char *) {}
+void cb_audio_set_progress(void *, uint32_t *, uint32_t *, uint32_t *) {}
+
+/* HLS video (YouTube-style "AirPlay video") isn't advertised, but UxPlay calls
+   some of these without null checks if a client tries it anyway. */
+void cb_on_video_play(void *, const char *, const float) {}
+void cb_on_video_scrub(void *, const float) {}
+void cb_on_video_rate(void *, const float) {}
+void cb_on_video_stop(void *) {}
+void cb_on_video_acquire_playback_info(void *, playback_info_t *) {}
+float cb_on_video_playlist_remove(void *) { return 0.0f; }
 
 /* ---- server lifecycle ----------------------------------------------------- */
 
@@ -432,6 +445,16 @@ jint native_start(JNIEnv *env, jclass, jobject listener, jstring jname, jbyteArr
     cbs.export_dacp = cb_export_dacp;
     cbs.video_reset = cb_video_reset;
     cbs.video_set_codec = cb_video_set_codec;
+    cbs.mirror_video_running = cb_mirror_video_running;
+    cbs.video_report_size = cb_video_report_size;
+    cbs.audio_remote_control_id = cb_audio_remote_control_id;
+    cbs.audio_set_progress = cb_audio_set_progress;
+    cbs.on_video_play = cb_on_video_play;
+    cbs.on_video_scrub = cb_on_video_scrub;
+    cbs.on_video_rate = cb_on_video_rate;
+    cbs.on_video_stop = cb_on_video_stop;
+    cbs.on_video_acquire_playback_info = cb_on_video_acquire_playback_info;
+    cbs.on_video_playlist_remove = cb_on_video_playlist_remove;
 
     ntp_global_init();
     g_raop = raop_init(&cbs);

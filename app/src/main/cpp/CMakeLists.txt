@@ -21,7 +21,7 @@ add_library(plist STATIC
         ${PL}/src/plist.c ${PL}/src/bplist.c ${PL}/src/xplist.c ${PL}/src/jplist.c
         ${PL}/src/oplist.c ${PL}/src/base64.c ${PL}/src/bytearray.c ${PL}/src/hashtable.c
         ${PL}/src/ptrarray.c ${PL}/src/time64.c ${PL}/src/jsmn.c ${PL}/src/out-default.c
-        ${PL}/src/out-plutil.c ${PL}/src/out-limd.c
+        ${PL}/src/out-plutil.c ${PL}/src/out-limd.c ${PL}/src/common.c
         ${PL}/libcnary/node.c ${PL}/libcnary/node_list.c)
 target_include_directories(plist PUBLIC ${PL}/include PRIVATE ${PL}/src ${PL}/libcnary/include)
 target_compile_definitions(plist PRIVATE
