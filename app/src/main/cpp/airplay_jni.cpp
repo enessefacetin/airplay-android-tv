@@ -139,6 +139,15 @@ int64_t presentation_ns(uint64_t remote_ns, uint64_t local_realtime_ns, bool sen
               anchor == now_mono ? "arrival time" : "sender's NTP time");
     }
     int64_t pts = (int64_t) remote_ns + offset;
+    // AirPlay never schedules more than a few seconds ahead or behind. A timestamp far
+    // outside that means the sender switched clocks (e.g. a restarted audio stream whose
+    // RTP-to-NTP mapping isn't the one we anchored on): re-anchor on this packet.
+    if (llabs(pts - now_mono) > 5000000000LL) {
+        LOG_I("%s timestamp %lld ms from now, re-anchoring", what, (long long) ((pts - now_mono) / 1000000));
+        offset = now_mono - (int64_t) remote_ns;
+        g_remote_offset = offset;
+        pts = (int64_t) remote_ns + offset;
+    }
     if (now_mono - g_last_diag_ns > 5000000000LL) {
         g_last_diag_ns = now_mono;
         LOG_I("%s pts - now = %lld ms", what, (long long) ((pts - now_mono) / 1000000));

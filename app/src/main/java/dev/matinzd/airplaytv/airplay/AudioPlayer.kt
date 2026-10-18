@@ -45,6 +45,8 @@ class AudioPlayer(private val sync: AvSync) {
     private var framesWritten = 0L
     private var pipelineNs = -1L
     private val timestamp = AudioTimestamp()
+    // Silence inserted to delay audio, as (end frame, frames), until it has played out.
+    private val pendingSilence = ArrayDeque<LongArray>()
     private val stats = Stats()
 
     fun configure(ct: Int, samplesPerFrame: Int, lowLatency: Boolean) = post {
@@ -67,6 +69,7 @@ class AudioPlayer(private val sync: AvSync) {
         runCatching { aac?.flush() }
         aacPtsUs = 0
         framesWritten = 0
+        pendingSilence.clear()
     }
 
     fun setVolume(gain: Float) = post {
@@ -103,8 +106,10 @@ class AudioPlayer(private val sync: AvSync) {
             if (!t.getTimestamp(timestamp)) stats.noTimestamp++
             val heardAtNs = nextFrameHeardAtNs(t, now)
             if (heardAtNs != null) {
-                val deviceNs = if (pipelineNs >= 0) pipelineNs else DEFAULT_DEVICE_LATENCY_NS
-                sync.reportAudio(now - ptsNs + deviceNs)
+                // What audio needs: when it would be heard if nothing were done, i.e. arrival
+                // lateness + the track's natural buffering + device latency, but not the
+                // silence we inserted on purpose (counting that would feed back on itself).
+                sync.reportAudio(heardAtNs - ptsNs - pendingSilenceNs(t))
                 val error = heardAtNs - (ptsNs + sync.latencyNs) // > 0: late, < 0: early
                 stats.error(error)
                 when {
@@ -120,10 +125,16 @@ class AudioPlayer(private val sync: AvSync) {
                         stats.dropped++
                         return
                     }
+                    error < -BOGUS_EARLY_NS -> {
+                        // Timestamps this far off are wrong (the native layer re-anchors);
+                        // play the packet rather than fill the track with silence.
+                        stats.bogus++
+                    }
                     error < -MAX_EARLY_NS -> {
                         val silence = ((-error) * SAMPLE_RATE / 1_000_000_000L).toInt()
                             .coerceAtMost(SAMPLE_RATE) // at most 1 s per packet
                         if (!writeSilence(t, silence)) return
+                        pendingSilence.addLast(longArrayOf(framesWritten, silence.toLong()))
                         stats.silenceFrames += silence
                     }
                 }
@@ -145,11 +156,20 @@ class AudioPlayer(private val sync: AvSync) {
 
     private fun queuedFrames(t: AudioTrack) = framesWritten - t.playbackHeadPosition.toLong()
 
+    private fun pendingSilenceNs(t: AudioTrack): Long {
+        val head = t.playbackHeadPosition.toLong()
+        while (pendingSilence.isNotEmpty() && pendingSilence.first()[0] <= head) pendingSilence.removeFirst()
+        var frames = 0L
+        for (entry in pendingSilence) frames += minOf(entry[1], entry[0] - head)
+        return frames * 1_000_000_000L / SAMPLE_RATE
+    }
+
     private fun resetTrack(t: AudioTrack) {
         t.pause()
         t.flush()
         t.play()
         framesWritten = 0
+        pendingSilence.clear()
     }
 
     /**
@@ -200,6 +220,7 @@ class AudioPlayer(private val sync: AvSync) {
         val bufferBytes = if (lowLatency) maxOf(minBuffer * 2, SAMPLE_RATE * BYTES_PER_FRAME / 2)
         else SAMPLE_RATE * BYTES_PER_FRAME * 3
         framesWritten = 0
+        pendingSilence.clear()
         return AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -220,9 +241,12 @@ class AudioPlayer(private val sync: AvSync) {
             .also {
                 // A streaming track only starts once its buffer is full, unless told
                 // otherwise: with a 3 s buffer that held music back for 3 s (and gave no
-                // timestamps meanwhile). Start as soon as one device buffer is queued.
+                // timestamps meanwhile). What's queued when it starts stays queued, so this
+                // is also the audio latency floor: 40 ms while mirroring, one device
+                // buffer for music.
                 if (Build.VERSION.SDK_INT >= 31) {
-                    it.setStartThresholdInFrames(minBuffer / BYTES_PER_FRAME)
+                    val frames = if (lowLatency) SAMPLE_RATE / 25 else minBuffer / BYTES_PER_FRAME
+                    it.setStartThresholdInFrames(frames)
                 }
                 it.setVolume(gain)
                 it.play()
@@ -306,6 +330,7 @@ class AudioPlayer(private val sync: AvSync) {
         var dropped = 0
         var silenceFrames = 0L
         var noTimestamp = 0
+        var bogus = 0
         private var count = 0
         private var errorSumNs = 0L
         private var windowStart = System.nanoTime()
@@ -321,13 +346,13 @@ class AudioPlayer(private val sync: AvSync) {
             if (elapsed < 5_000_000_000L) return
             val t = track
             val queuedMs = if (t != null) (framesWritten - t.playbackHeadPosition.toLong()) * 1000 / SAMPLE_RATE else 0
-            Log.i(TAG, ("sync error avg %d ms, dropped %d, silence %d ms, no-timestamp %d, " +
+            Log.i(TAG, ("sync error avg %d ms, dropped %d, silence %d ms, no-timestamp %d, bogus %d, " +
                 "queued %d ms, device latency %d ms, state %d, backlog %d").format(
                 if (count > 0) errorSumNs / count / AvSync.MS else 0, dropped,
-                silenceFrames * 1000 / SAMPLE_RATE, noTimestamp, queuedMs, pipelineNs / AvSync.MS,
+                silenceFrames * 1000 / SAMPLE_RATE, noTimestamp, bogus, queuedMs, pipelineNs / AvSync.MS,
                 t?.playState ?: -1, queued.get()))
             windowStart = System.nanoTime()
-            count = 0; errorSumNs = 0; dropped = 0; silenceFrames = 0; noTimestamp = 0
+            count = 0; errorSumNs = 0; dropped = 0; silenceFrames = 0; noTimestamp = 0; bogus = 0
         }
     }
 
@@ -347,5 +372,6 @@ class AudioPlayer(private val sync: AvSync) {
         private const val RESYNC_LATE_NS = 150 * AvSync.MS
         private const val DEFAULT_DEVICE_LATENCY_NS = 200 * AvSync.MS // Streamer HDMI: ~210 ms
         private const val MAX_EARLY_NS = 15 * AvSync.MS
+        private const val BOGUS_EARLY_NS = 4_000 * AvSync.MS
     }
 }
