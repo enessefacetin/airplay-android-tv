@@ -10,8 +10,8 @@ import android.util.Log
  * it needs (how late it would otherwise be). Both streams are then presented at
  * `timestamp + latency`, with the latency set by the slower stream plus a margin.
  *
- * Raised at once when a stream needs more; lowered slowly when it needs less, but
- * only while there is video (for audio-only AirPlay a steady latency matters more).
+ * Raised at once when a stream needs more; lowered slowly when it needs less, except
+ * for AirPlay music, where a steady latency matters more than a low one.
  * Never negative: for AirPlay music (packets arrive ~2 s early) it is 0, so audio
  * plays exactly when the sender intends.
  */
@@ -19,6 +19,10 @@ class AvSync {
     @Volatile
     var latencyNs = 0L
         private set
+
+    /** Set when the sender streams audio without its screen (AirPlay music). */
+    @Volatile
+    var audioOnly = false
 
     private val video = Window()
     private val audio = Window()
@@ -34,6 +38,7 @@ class AvSync {
     @Synchronized
     fun reset() {
         latencyNs = 0
+        audioOnly = false
         video.reset()
         audio.reset()
     }
@@ -45,18 +50,18 @@ class AvSync {
         val now = System.nanoTime()
         window.add(requiredNs, now)
 
-        val videoActive = video.max(now) != Window.NONE
         val needed = maxOf(video.max(now), audio.max(now))
         if (needed == Window.NONE) return
-        // Mirroring wants the lowest latency that works. Audio-only AirPlay (music) arrives
-        // in bursts: keep a wider margin and never lower the latency, so it settles once
-        // instead of moving up and down (each move is a gap or a drop you can hear).
-        val margin = if (videoActive) MARGIN_NS else AUDIO_ONLY_MARGIN_NS
-        val target = (needed + margin).coerceIn(0, MAX_LATENCY_NS)
+        // Mirroring wants the lowest latency that works. Music arrives in bursts: keep a
+        // wider margin, start near where it settles (~0.7 s here) and never lower it, so
+        // it doesn't move up and down (each move is a gap or a drop you can hear).
+        val margin = if (audioOnly) AUDIO_ONLY_MARGIN_NS else MARGIN_NS
+        var target = (needed + margin).coerceIn(0, MAX_LATENCY_NS)
+        if (audioOnly) target = maxOf(target, AUDIO_ONLY_START_NS)
         val current = latencyNs
         if (target > current) {
             latencyNs = target
-        } else if (videoActive && current - target > HYSTERESIS_NS && now - lastDecreaseNs > 1_000_000_000L) {
+        } else if (!audioOnly && current - target > HYSTERESIS_NS && now - lastDecreaseNs > 1_000_000_000L) {
             // Shed a quarter of the excess per second (at least 10 ms).
             latencyNs = current - maxOf((current - target) / 4, minOf(current - target, STEP_DOWN_NS))
             lastDecreaseNs = now
@@ -103,6 +108,7 @@ class AvSync {
         const val MS = 1_000_000L
         private const val MARGIN_NS = 20 * MS        // covers vsync and scheduling jitter
         private const val AUDIO_ONLY_MARGIN_NS = 150 * MS
+        private const val AUDIO_ONLY_START_NS = 700 * MS
         private const val HYSTERESIS_NS = 30 * MS
         private const val STEP_DOWN_NS = 10 * MS
         const val MAX_LATENCY_NS = 1_000 * MS

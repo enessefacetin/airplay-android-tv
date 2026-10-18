@@ -234,6 +234,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
     override fun onVideoFlush() = Unit
 
     override fun onAudioFormat(ct: Int, samplesPerFrame: Int, usingScreen: Boolean, isMedia: Boolean) {
+        sync.audioOnly = !usingScreen
         audio.configure(ct, samplesPerFrame, lowLatency = usingScreen)
         AirPlaySession.update { it.copy(audioOnly = !usingScreen && !it.showsVideo) }
     }
