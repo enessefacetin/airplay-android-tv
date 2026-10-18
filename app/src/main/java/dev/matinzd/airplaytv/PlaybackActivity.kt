@@ -180,8 +180,10 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
             addView(statusText, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(ctx, 8) })
             addView(trackSource, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(ctx, 12) })
         }
-        trackTitle = TvUi.text(this, 44f, bold = true).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END }
-        trackArtist = TvUi.text(this, 28f).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END }
+        // One line each, scrolling when too long: the layout keeps the same height for
+        // every track, so nothing jumps when skipping.
+        trackTitle = marquee(TvUi.text(this, 44f, bold = true))
+        trackArtist = marquee(TvUi.text(this, 28f))
         trackAlbum = TvUi.text(this, 22f, TvUi.TEXT_DIM).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
 
         progressFill = View(this).apply { background = TvUi.rounded(ctx, TvUi.TEXT, radiusDp = 3) }
@@ -293,6 +295,14 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private var wasPlaying = true
+
+    private fun marquee(view: TextView) = view.apply {
+        isSingleLine = true
+        ellipsize = TextUtils.TruncateAt.MARQUEE
+        marqueeRepeatLimit = -1 // forever
+        isSelected = true // marquee only runs on a selected view
+        setHorizontalFadingEdgeEnabled(true)
+    }
 
     private val hideControls = Runnable {
         if (AirPlaySession.state.playing) controls.animate().alpha(0f).setDuration(400).start()
