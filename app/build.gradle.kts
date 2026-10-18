@@ -29,12 +29,24 @@ android {
         }
     }
 
+    // The release key, set by the release workflow (or locally from
+    // ~/.android/airplay-tv-release/credentials.properties).
+    val releaseKeystore = System.getenv("RELEASE_KEYSTORE")
+    signingConfigs {
+        if (releaseKeystore != null) create("release") {
+            storeFile = file(releaseKeystore)
+            storePassword = System.getenv("RELEASE_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("RELEASE_KEY_ALIAS")
+            keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Same key as debug builds, so a release build installs over a debug one
-            // (and vice versa) without uninstalling. Fine for sideloading.
-            signingConfig = signingConfigs.getByName("debug")
+            // Without the release key, use the debug key, so a local release build installs
+            // over a debug one (and vice versa) without uninstalling. Fine for sideloading.
+            signingConfig = signingConfigs.getByName(if (releaseKeystore != null) "release" else "debug")
         }
     }
 
