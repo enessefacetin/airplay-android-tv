@@ -110,42 +110,56 @@ int64_t monotonic_now_ns() {
     return (int64_t) ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-/* Presentation clock, as UxPlay does it: audio and video timestamps share the
-   sender's clock (ntp_time_remote). One offset maps that clock onto
-   System.nanoTime() (CLOCK_MONOTONIC), anchored on the first packet of a session.
-   AirPlay music anchors at the NTP-synced time the sender intends (about 2 s after
-   arrival), so playback matches the iPhone. Mirroring anchors at arrival: the
-   iPhone's own ~300 ms target would only add latency; AvSync adds what's needed. */
+/* Presentation clock. Packets carry the sender's timestamps (ntp_time_remote); an
+   offset maps them onto System.nanoTime() (CLOCK_MONOTONIC), anchored on a stream's
+   first packet: at its NTP-synced local time when that is plausible and wanted
+   (AirPlay music), otherwise at its arrival time.
+
+   Audio and video usually share the sender's clock (UxPlay uses one offset), but not
+   always: after an AirPlay video session an iPhone's mirror audio and video were
+   ~9 h apart (uptime vs wall clock). So each stream has its own offset. A stream
+   adopts the other's offset when its timestamps make sense with it (that keeps lip
+   sync); otherwise it anchors on its own and the two stop disturbing each other. */
 constexpr int64_t kNoOffset = INT64_MIN;
-std::atomic<int64_t> g_remote_offset{kNoOffset};
+constexpr int64_t kPlausibleNs = 5000000000LL;  // AirPlay never schedules >5 s ahead/behind
+enum { STREAM_AUDIO = 0, STREAM_VIDEO = 1 };
+std::atomic<int64_t> g_offset[2] = {{kNoOffset}, {kNoOffset}};
 std::atomic<int64_t> g_last_diag_ns{0};
 
-void reset_presentation_clock() { g_remote_offset = kNoOffset; }
+void reset_presentation_clock() {
+    g_offset[STREAM_AUDIO] = kNoOffset;
+    g_offset[STREAM_VIDEO] = kNoOffset;
+}
 
-int64_t presentation_ns(uint64_t remote_ns, uint64_t local_realtime_ns, bool sender_time, const char *what) {
+int64_t presentation_ns(uint64_t remote_ns, uint64_t local_realtime_ns, bool sender_time, int stream) {
     if (!remote_ns) return 0;
+    const char *what = stream == STREAM_AUDIO ? "audio" : "video";
     int64_t now_mono = monotonic_now_ns();
-    int64_t offset = g_remote_offset;
+    int64_t offset = g_offset[stream];
     if (offset == kNoOffset) {
-        int64_t anchor = now_mono;
-        if (sender_time && local_realtime_ns) {
-            int64_t local_mono = (int64_t) local_realtime_ns - realtime_now_ns() + now_mono;
-            if (llabs(local_mono - now_mono) < 10000000000LL) anchor = local_mono;
+        int64_t other = g_offset[1 - stream];
+        if (other != kNoOffset && llabs((int64_t) remote_ns + other - now_mono) < kPlausibleNs) {
+            offset = other;  // same sender clock as the other stream: share it (lip sync)
+            LOG_I("presentation clock: %s shares the %s clock", what, stream == STREAM_AUDIO ? "video" : "audio");
+        } else {
+            int64_t anchor = now_mono;
+            if (sender_time && local_realtime_ns) {
+                int64_t local_mono = (int64_t) local_realtime_ns - realtime_now_ns() + now_mono;
+                if (llabs(local_mono - now_mono) < 10000000000LL) anchor = local_mono;
+            }
+            offset = anchor - (int64_t) remote_ns;
+            LOG_I("presentation clock: %s anchored on %s%s", what,
+                  anchor == now_mono ? "arrival time" : "the sender's NTP time",
+                  other != kNoOffset ? " (different clock from the other stream)" : "");
         }
-        offset = anchor - (int64_t) remote_ns;
-        int64_t expected = kNoOffset;
-        if (!g_remote_offset.compare_exchange_strong(expected, offset)) offset = expected;
-        LOG_I("presentation clock anchored on %s (%s)", what,
-              anchor == now_mono ? "arrival time" : "sender's NTP time");
+        g_offset[stream] = offset;
     }
     int64_t pts = (int64_t) remote_ns + offset;
-    // AirPlay never schedules more than a few seconds ahead or behind. A timestamp far
-    // outside that means the sender switched clocks (e.g. a restarted audio stream whose
-    // RTP-to-NTP mapping isn't the one we anchored on): re-anchor on this packet.
-    if (llabs(pts - now_mono) > 5000000000LL) {
+    if (llabs(pts - now_mono) > kPlausibleNs) {
+        // This stream switched clocks mid-way (e.g. a restarted audio stream): re-anchor it.
         LOG_I("%s timestamp %lld ms from now, re-anchoring", what, (long long) ((pts - now_mono) / 1000000));
         offset = now_mono - (int64_t) remote_ns;
-        g_remote_offset = offset;
+        g_offset[stream] = offset;
         pts = (int64_t) remote_ns + offset;
     }
     if (now_mono - g_last_diag_ns > 5000000000LL) {
@@ -319,7 +333,7 @@ void cb_video_process(void *, raop_ntp_t *, video_decode_struct *data) {
     JNIEnv *env = get_env();
     if (!env) return;
     jbyteArray arr = to_jbytes(env, data->data, data->data_len);
-    jlong pts = presentation_ns(data->ntp_time_remote, data->ntp_time_local, false, "video");
+    jlong pts = presentation_ns(data->ntp_time_remote, data->ntp_time_local, false, STREAM_VIDEO);
     env->CallVoidMethod(g_listener, m.onVideoData, arr, pts);
     check_exception(env);
     if (arr) env->DeleteLocalRef(arr);
@@ -372,7 +386,7 @@ void cb_audio_get_format(void *, unsigned char *ct, unsigned short *spf, bool *u
 
 void cb_audio_process(void *, raop_ntp_t *, audio_decode_struct *data) {
     if (data->data_len <= 0) return;
-    int64_t pts_ns = presentation_ns(data->ntp_time_remote, data->ntp_time_local, data->ct == 2, "audio");
+    int64_t pts_ns = presentation_ns(data->ntp_time_remote, data->ntp_time_local, data->ct == 2, STREAM_AUDIO);
     switch (data->ct) {
     case 1:  // LPCM S16LE
         call_with_bytes_ts(m.onAudioPcm, data->data, data->data_len, pts_ns);

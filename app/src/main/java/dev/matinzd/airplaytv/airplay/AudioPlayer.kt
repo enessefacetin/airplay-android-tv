@@ -48,6 +48,8 @@ class AudioPlayer(private val sync: AvSync) {
     private val timestamp = AudioTimestamp()
     // Silence inserted to delay audio, as (end frame, frames), until it has played out.
     private val pendingSilence = ArrayDeque<LongArray>()
+    // Frames actually heard by now (from the track's timestamp), or -1 if unknown.
+    private var presentedFrames = -1L
     private val stats = Stats()
 
     fun configure(ct: Int, samplesPerFrame: Int, lowLatency: Boolean) = post {
@@ -77,6 +79,7 @@ class AudioPlayer(private val sync: AvSync) {
         aacPtsUs = 0
         framesWritten = 0
         pendingSilence.clear()
+        presentedFrames = -1
     }
 
     fun setVolume(gain: Float) = post {
@@ -166,8 +169,13 @@ class AudioPlayer(private val sync: AvSync) {
 
     private fun queuedFrames(t: AudioTrack) = framesWritten - t.playbackHeadPosition.toLong()
 
+    /**
+     * Inserted silence not yet heard. Measured against what has been heard (the track's
+     * timestamp), not the playback head: the Streamer's HDMI path pulls audio from the
+     * track well before it plays, so head-based accounting called silence "done" early.
+     */
     private fun pendingSilenceNs(t: AudioTrack): Long {
-        val head = t.playbackHeadPosition.toLong()
+        val head = if (presentedFrames >= 0) presentedFrames else t.playbackHeadPosition.toLong()
         while (pendingSilence.isNotEmpty() && pendingSilence.first()[0] <= head) pendingSilence.removeFirst()
         var frames = 0L
         for (entry in pendingSilence) frames += minOf(entry[1], entry[0] - head)
@@ -180,6 +188,7 @@ class AudioPlayer(private val sync: AvSync) {
         t.play()
         framesWritten = 0
         pendingSilence.clear()
+        presentedFrames = -1
     }
 
     /**
@@ -194,10 +203,12 @@ class AudioPlayer(private val sync: AvSync) {
             // A new track takes ~1 s to report timestamps. Estimate meanwhile from what's
             // queued plus the device latency, instead of writing without timing (which
             // overfills the queue and forces a resync once timestamps arrive).
+            presentedFrames = -1
             return now + queuedNs + (if (pipelineNs >= 0) pipelineNs else DEFAULT_DEVICE_LATENCY_NS)
         }
         val framesAhead = framesWritten - timestamp.framePosition
         val heardAt = timestamp.nanoTime + framesAhead * 1_000_000_000L / SAMPLE_RATE
+        presentedFrames = timestamp.framePosition + (now - timestamp.nanoTime) * SAMPLE_RATE / 1_000_000_000L
         val deviceNs = (heardAt - now - queuedNs).coerceAtLeast(0)
         if (pipelineNs < 0) {
             pipelineNs = deviceNs
@@ -231,6 +242,7 @@ class AudioPlayer(private val sync: AvSync) {
         val bufferBytes = maxOf(minBuffer * 2, SAMPLE_RATE * BYTES_PER_FRAME * 3)
         framesWritten = 0
         pendingSilence.clear()
+        presentedFrames = -1
         return AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
