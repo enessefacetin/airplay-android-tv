@@ -58,7 +58,12 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ./gradlew :app:installDebug        # or :app:installRelease (signed with the debug key locally)
 scripts/dev.sh                     # build, install, device setup, open app, follow logs
 scripts/dev.sh --release           # same with the release build (normal logging)
+./gradlew :app:testDebugUnitTest   # unit tests (JVM, no device), in app/src/test/
 ```
+
+Unit tests cover pure logic only (sync rules, parsers, session state). Keep new logic
+free of Android types where it is easy, so it can be tested the same way; pass a clock
+instead of calling `System.nanoTime()` when timing matters (see `AvSync`).
 
 The first build compiles OpenSSL (`scripts/build-openssl.sh`, run by Gradle
 automatically), which takes a few minutes.
