@@ -1,8 +1,36 @@
 # AirPlay receiver for Android TV
 
+[![CI](https://github.com/matinzd/airplay-android-tv/actions/workflows/ci.yml/badge.svg)](https://github.com/matinzd/airplay-android-tv/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/matinzd/airplay-android-tv)](https://github.com/matinzd/airplay-android-tv/releases/latest)
+
 Mirror an iPhone/iPad/Mac screen or AirPlay music to an Android TV device (built and tested on a
 Google TV Streamer 4K, Android 14). Starting AirPlay wakes the device from standby, and HDMI-CEC
 turns on the TV and switches to its input. Turning the TV off ends the session.
+
+## Features
+
+- **Screen mirroring** from iPhone, iPad and Mac, up to 4K (H.265) at 60 fps, with low delay
+  (the TV's game mode is requested). A phone held upright fills the side bars with a blurred
+  copy of its screen.
+- **AirPlay music** with cover art, title, artist and album, playing/paused state and track
+  progress. Long titles scroll instead of moving the layout.
+- **AirPlay video** from apps such as YouTube and Safari, with play, pause, seek and stop from
+  the phone.
+- **Lip-sync** between sound and picture; an optional low-latency mode for games.
+- **Wakes the TV** from standby when AirPlay starts (HDMI-CEC turns it on and switches input).
+  The receiver stays in the AirPlay list while the TV is off.
+- **TV remote**: play/pause and previous/next track for music; Back pauses music or ends
+  mirroring.
+- **Optional pairing code** for new devices; paired devices are remembered.
+- **10-foot UI** for the remote, with burn-in protection on the music screen (the content
+  moves slowly and dims after 5 minutes).
+- **Settings** for the AirPlay name, pairing code, 4K and low-latency mirroring.
+
+## Install
+
+Download the APK from the [latest release](https://github.com/matinzd/airplay-android-tv/releases/latest)
+and install it with `adb install airplay-tv-<version>.apk`, then run `scripts/setup-device.sh` once
+(see [Build and run](#build-and-run)). Only `armeabi-v7a` is built.
 
 ## Documentation
 
@@ -37,8 +65,8 @@ turns on the TV and switches to its input. Turning the TV off ends the session.
 Open the app on the TV and choose **Settings**:
 
 - **AirPlay name**: defaults to the TV's device name.
-- **Require a PIN for new devices**: a new iPhone/Mac must enter a code shown on the TV once; it is
-  then remembered. "Forget remembered devices" clears the list.
+- **Require a code for new devices**: a new iPhone/Mac must enter a code shown on the TV once; it
+  is then remembered. "Remembered devices" forgets them all.
 - **4K mirroring (H.265)**: on by default; turn off on slow Wi-Fi.
 - **Low-latency mirroring**: video doesn't wait for audio, so the picture follows the phone faster
   but sound may lag (useful for games and scrolling).
@@ -60,6 +88,16 @@ notifications.
 ## Limitations
 
 - No FairPlay-protected video (Apple TV+, Netflix casting). Screen mirroring works everywhere.
+- No AirPlay 2 multi-room audio (playing in sync with HomePods).
+- The phone's volume controls the app's sound level; the TV or receiver volume is set with the
+  TV remote ([ADR 0017](docs/adr/0017-tv-volume-over-cec.md)).
+
+## Releases
+
+Releases are automatic: commits on `main` follow [Conventional Commits](https://www.conventionalcommits.org/),
+and [release-please](https://github.com/googleapis/release-please) keeps a release pull request with
+the next version and the [changelog](CHANGELOG.md). Merging it publishes a GitHub release with a
+signed APK.
 
 ## Licence
 
