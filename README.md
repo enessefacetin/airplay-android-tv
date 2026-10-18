@@ -22,7 +22,8 @@ turns on the TV and switches to its input. Turning the TV off ends the session.
   `releaseOutputBuffer(index, timeNs)` and audio inserts silence or drops packets to stay on the same
   timeline. AirPlay music plays at the exact time the sender intends (about 2 s after it arrives).
 - **Wake on AirPlay:** `AirPlayService` is a foreground service holding a partial wake lock. On RTSP
-  SETUP it turns the screen on and opens `PlaybackActivity`.
+  SETUP (or `/play` for AirPlay video) it turns the screen on and opens `PlaybackActivity`. Turning
+  the TV off drops the session. It starts on boot, and `KeepAliveJob` restarts it if the system stops it.
 
 ## Build and run
 
@@ -30,6 +31,7 @@ Requires Android Studio's SDK with NDK 29 and CMake 3.22.1. The first build also
 
 ```
 scripts/dev.sh                          # build, install, set up, follow logs (10.0.0.242:5555)
+scripts/dev.sh --release                # release build: INFO logging, for everyday use
 ANDROID_SERIAL=host:port scripts/dev.sh # another device
 ```
 
