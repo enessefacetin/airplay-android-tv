@@ -1,6 +1,8 @@
 package dev.matinzd.airplaytv.airplay
 
 import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
 import android.os.Handler
@@ -32,6 +34,7 @@ class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
     private var gopBytes = 0L
     private var gopOverflow = false
     private val pending = ArrayDeque<ByteArray>() // waiting for a decoder input buffer
+    private val stats = Stats()
     private val freeInputs = ArrayDeque<Int>()
 
     fun onFrame(data: ByteArray) {
@@ -52,6 +55,7 @@ class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
                     H264.NAL_IDR -> keyframe = true
                 }
             }
+            stats.received()
             if (keyframe) {
                 gop.clear()
                 gopBytes = 0
@@ -76,11 +80,15 @@ class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
             if (c != null) {
                 pending.addLast(data)
                 feedLocked(c)
-            } else if (surface != null) {
+            } else if (toRelease == null) {
                 startCodecLocked()
             }
         }
-        toRelease?.let(::release)
+        // A Surface can only feed one decoder: release the old one before starting the next.
+        toRelease?.let {
+            release(it)
+            synchronized(lock) { if (codec == null) startCodecLocked() }
+        }
     }
 
     fun setSurface(newSurface: Surface?) {
@@ -90,9 +98,12 @@ class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
             toRelease = detachCodecLocked()
             surface = newSurface
             errorRetries = 0
-            if (newSurface != null) startCodecLocked()
+            if (toRelease == null) startCodecLocked()
         }
-        toRelease?.let(::release)
+        toRelease?.let {
+            release(it)
+            synchronized(lock) { if (codec == null) startCodecLocked() }
+        }
     }
 
     /** The mirror stream ended. */
@@ -127,7 +138,7 @@ class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
                 setInteger(MediaFormat.KEY_PRIORITY, 0) // real-time
                 if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
-            val c = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            val c = createLowLatencyDecoder()
             c.setCallback(Callback(), handler)
             c.configure(format, s, null, 0)
             c.start()
@@ -139,6 +150,23 @@ class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
         } catch (e: Exception) {
             Log.e(TAG, "failed to start decoder", e)
         }
+    }
+
+    private fun createLowLatencyDecoder(): MediaCodec {
+        val mime = MediaFormat.MIMETYPE_VIDEO_AVC
+        val candidates = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+            .filter { !it.isEncoder && it.supportedTypes.any { t -> t.equals(mime, ignoreCase = true) } }
+        val lowLatency = candidates.firstOrNull {
+            it.getCapabilitiesForType(mime)
+                .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
+        }
+        Log.i(TAG, "AVC decoders: " + candidates.joinToString {
+            val ll = it.getCapabilitiesForType(mime)
+                .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
+            "${it.name}${if (ll) " (low-latency)" else ""}"
+        })
+        return if (lowLatency != null) MediaCodec.createByCodecName(lowLatency.name)
+        else MediaCodec.createDecoderByType(mime)
     }
 
     private fun feedLocked(c: MediaCodec) {
@@ -155,6 +183,7 @@ class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
                 }
                 buffer.put(frame)
                 c.queueInputBuffer(index, 0, frame.size, System.nanoTime() / 1000, 0)
+                stats.queued(pending.size)
             } catch (e: IllegalStateException) {
                 return // codec is being released
             }
@@ -187,6 +216,7 @@ class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
         }
 
         override fun onOutputBufferAvailable(c: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
+            stats.decoded(System.nanoTime() / 1000 - info.presentationTimeUs)
             try {
                 c.releaseOutputBuffer(index, true) // render immediately: lowest latency
             } catch (_: IllegalStateException) {
@@ -210,9 +240,38 @@ class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
             synchronized(lock) {
                 if (c !== codec) return
                 toRelease = detachCodecLocked()
-                if (errorRetries++ < 3) startCodecLocked()
             }
-            toRelease?.let(::release)
+            toRelease?.let {
+                release(it)
+                synchronized(lock) { if (codec == null && errorRetries++ < 3) startCodecLocked() }
+            }
+        }
+    }
+
+    /** Logs throughput and time-in-decoder every few seconds. */
+    private class Stats {
+        private var windowStart = System.nanoTime()
+        private var received = 0
+        private var decoded = 0
+        private var maxBacklog = 0
+        private var latencySumUs = 0L
+        private var latencyMaxUs = 0L
+
+        @Synchronized fun received() { received++ }
+        @Synchronized fun queued(backlog: Int) { if (backlog > maxBacklog) maxBacklog = backlog }
+
+        @Synchronized fun decoded(latencyUs: Long) {
+            decoded++
+            latencySumUs += latencyUs
+            if (latencyUs > latencyMaxUs) latencyMaxUs = latencyUs
+            val elapsed = System.nanoTime() - windowStart
+            if (elapsed >= 5_000_000_000L) {
+                val secs = elapsed / 1e9
+                Log.i(TAG, "in %.1f fps, out %.1f fps, decode latency avg %d ms / max %d ms, backlog max %d".format(
+                    received / secs, decoded / secs, latencySumUs / decoded / 1000, latencyMaxUs / 1000, maxBacklog))
+                windowStart = System.nanoTime()
+                received = 0; decoded = 0; maxBacklog = 0; latencySumUs = 0; latencyMaxUs = 0
+            }
         }
     }
 

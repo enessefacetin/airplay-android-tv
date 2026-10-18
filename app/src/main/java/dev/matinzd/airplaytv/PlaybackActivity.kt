@@ -3,6 +3,7 @@ package dev.matinzd.airplaytv
 import android.app.Activity
 import android.graphics.Color
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -40,6 +41,8 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         setShowWhenLocked(true)
         setTurnScreenOn(true)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Ask the TV for its low-latency game mode (HDMI ALLM): skips picture processing.
+        if (Build.VERSION.SDK_INT >= 30) window.setPreferMinimalPostProcessing(true)
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or
             View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
 
