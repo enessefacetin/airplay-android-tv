@@ -32,8 +32,15 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Same key as debug builds, so a release build installs over a debug one
+            // (and vice versa) without uninstalling. Fine for sideloading.
             signingConfig = signingConfigs.getByName("debug")
         }
+    }
+
+    lint {
+        // targetSdk stays at the Streamer's Android version (14) on purpose.
+        disable += "ExpiredTargetSdkVersion"
     }
 
     compileOptions {
