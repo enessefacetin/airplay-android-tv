@@ -30,10 +30,15 @@ class RemoteControl(context: Context) {
     @Volatile private var port = 0
     private var discovery: NsdManager.DiscoveryListener? = null
 
+    /** A command pressed before the sender was found; sent once it is. */
+    @Volatile private var pending: Command? = null
+    private var lastLookupNs = 0L
+
     /** The sender's IDs; repeated calls with the same ID are ignored. */
     fun setSender(newDacpId: String, newActiveRemote: String) {
         activeRemote = newActiveRemote
         if (newDacpId == dacpId) return
+        Log.i(TAG, "sender DACP-ID $newDacpId")
         dacpId = newDacpId
         host = null
         startDiscovery()
@@ -43,6 +48,7 @@ class RemoteControl(context: Context) {
         dacpId = null
         activeRemote = null
         host = null
+        pending = null
         stopDiscovery()
     }
 
@@ -51,6 +57,11 @@ class RemoteControl(context: Context) {
         val token = activeRemote
         if (h == null || token == null) {
             Log.i(TAG, "no remote-control target for ${command.path}")
+            // The lookup can miss the sender's announcement: look again, send when found.
+            if (dacpId != null) {
+                pending = command
+                if (System.nanoTime() - lastLookupNs > 3_000_000_000L) startDiscovery()
+            }
             return@execute
         }
         try {
@@ -69,12 +80,17 @@ class RemoteControl(context: Context) {
         }
     }
 
+    @Synchronized
     private fun startDiscovery() {
         stopDiscovery()
+        lastLookupNs = System.nanoTime()
         val listener = object : NsdManager.DiscoveryListener {
             override fun onServiceFound(info: NsdServiceInfo) {
                 val id = dacpId ?: return
-                if (!info.serviceName.equals("iTunes_Ctrl_$id", ignoreCase = true)) return
+                if (!info.serviceName.equals("iTunes_Ctrl_$id", ignoreCase = true)) {
+                    Log.i(TAG, "ignoring ${info.serviceName} (want iTunes_Ctrl_$id)")
+                    return
+                }
                 @Suppress("DEPRECATION")
                 nsd.resolveService(info, object : NsdManager.ResolveListener {
                     override fun onServiceResolved(resolved: NsdServiceInfo) {
@@ -82,6 +98,7 @@ class RemoteControl(context: Context) {
                         host = resolved.host
                         port = resolved.port
                         Log.i(TAG, "remote control at ${resolved.host?.hostAddress}:${resolved.port}")
+                        pending?.let { pending = null; send(it) }
                     }
 
                     override fun onResolveFailed(info: NsdServiceInfo, error: Int) {
@@ -93,13 +110,16 @@ class RemoteControl(context: Context) {
             override fun onServiceLost(info: NsdServiceInfo) = Unit
             override fun onDiscoveryStarted(type: String) = Unit
             override fun onDiscoveryStopped(type: String) = Unit
-            override fun onStartDiscoveryFailed(type: String, error: Int) = Unit
+            override fun onStartDiscoveryFailed(type: String, error: Int) {
+                Log.w(TAG, "discovery failed: $error")
+            }
             override fun onStopDiscoveryFailed(type: String, error: Int) = Unit
         }
         discovery = listener
         nsd.discoverServices("_dacp._tcp", NsdManager.PROTOCOL_DNS_SD, listener)
     }
 
+    @Synchronized
     private fun stopDiscovery() {
         discovery?.let { runCatching { nsd.stopServiceDiscovery(it) } }
         discovery = null
