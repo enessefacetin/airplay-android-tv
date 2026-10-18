@@ -292,7 +292,10 @@ class AirPlayService : Service(), AirPlayNative.Listener {
     }
 
     override fun onCoverArt(jpeg: ByteArray?) {
-        val bitmap = jpeg?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+        // Pausing makes the sender stop its audio stream (UxPlay then clears the art) and
+        // start a new one on resume. Keep the last cover until a new one arrives or the
+        // session ends.
+        val bitmap = jpeg?.let { BitmapFactory.decodeByteArray(it, 0, it.size) } ?: return
         AirPlaySession.update { it.copy(coverArt = bitmap) }
     }
 
