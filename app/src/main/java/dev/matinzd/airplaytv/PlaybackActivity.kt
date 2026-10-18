@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -140,9 +141,9 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
             background = TvUi.rounded(this@PlaybackActivity, TvUi.SURFACE, radiusDp = 20)
         }
         trackSource = TvUi.text(this, 18f, TvUi.ACCENT)
-        trackTitle = TvUi.text(this, 44f, bold = true).apply { maxLines = 2 }
-        trackArtist = TvUi.text(this, 28f).apply { maxLines = 1 }
-        trackAlbum = TvUi.text(this, 22f, TvUi.TEXT_DIM).apply { maxLines = 1 }
+        trackTitle = TvUi.text(this, 44f, bold = true).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END }
+        trackArtist = TvUi.text(this, 28f).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END }
+        trackAlbum = TvUi.text(this, 22f, TvUi.TEXT_DIM).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(trackSource)
