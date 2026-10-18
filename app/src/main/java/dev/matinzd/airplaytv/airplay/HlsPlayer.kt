@@ -91,7 +91,10 @@ class HlsPlayer(
     /** [duration, position, seekStart, seekDuration, rate, stillPlaying, bufferEmpty, bufferFull] */
     fun playbackInfo(): DoubleArray {
         val s = snapshot
-        val stillPlaying = s.active && !s.ended
+        // The iPhone polls right after /play, before the playlists are fetched and
+        // playback starts. Only report "finished" once a video has actually ended,
+        // otherwise the iPhone tears the session down.
+        val stillPlaying = !s.ended
         return doubleArrayOf(
             s.durationSec, s.positionSec, 0.0, s.durationSec,
             if (s.playing) 1.0 else 0.0,
