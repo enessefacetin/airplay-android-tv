@@ -37,7 +37,9 @@ battery-optimisation exemption, notifications).
 - Decoder: the low-latency MediaTek decoder when available.
 - Frames since the last keyframe are cached and replayed when the screen attaches.
 - Rotation (new SPS) restarts the decoder cleanly.
-- Picture is letterboxed to the video's aspect ratio on black.
+- Picture is letterboxed to the video's aspect ratio on black. When the mirrored screen is
+  narrower than 3:2 (a phone held upright, an iPad), the side bars show a blurred, dimmed
+  copy of the picture (`PixelCopy` of a 48 px wide frame, 4 times a second; Android 12+).
 - The window requests minimal post-processing (ALLM / game mode).
 
 ## 4. Audio

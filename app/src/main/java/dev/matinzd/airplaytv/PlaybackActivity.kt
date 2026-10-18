@@ -1,6 +1,7 @@
 package dev.matinzd.airplaytv
 
 import android.app.Activity
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.RenderEffect
 import android.graphics.Shader
@@ -12,6 +13,7 @@ import android.os.Looper
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.PixelCopy
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -33,6 +35,8 @@ import kotlin.random.Random
  */
 class PlaybackActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var videoFrame: AspectRatioFrameLayout
+    private lateinit var surfaceView: SurfaceView
+    private lateinit var videoBackdrop: ImageView
 
     private lateinit var connectingPanel: View
     private lateinit var connectingTitle: TextView
@@ -78,13 +82,15 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or
             View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
 
-        val surfaceView = SurfaceView(this).apply { holder.addCallback(this@PlaybackActivity) }
+        surfaceView = SurfaceView(this).apply { holder.addCallback(this@PlaybackActivity) }
+        videoBackdrop = blurred(ImageView(this)).apply { alpha = 0.45f; visibility = View.GONE }
         videoFrame = AspectRatioFrameLayout(this).apply {
             addView(surfaceView, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         }
 
         setContentView(FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
+            addView(videoBackdrop, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(videoFrame, AspectRatioFrameLayout.centered())
             addView(buildMusicPanel(), FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(buildConnectingPanel(), FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
@@ -147,12 +153,15 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         return pinPanel
     }
 
+    /** A full-screen, heavily blurred copy of a picture, for behind the content. */
+    private fun blurred(view: ImageView) = view.apply {
+        scaleType = ImageView.ScaleType.CENTER_CROP
+        if (Build.VERSION.SDK_INT >= 31) setRenderEffect(RenderEffect.createBlurEffect(120f, 120f, Shader.TileMode.CLAMP))
+    }
+
     private fun buildMusicPanel(): View {
         val ctx = this
-        backdrop = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            if (Build.VERSION.SDK_INT >= 31) setRenderEffect(RenderEffect.createBlurEffect(120f, 120f, Shader.TileMode.CLAMP))
-        }
+        backdrop = blurred(ImageView(this))
         cover = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             clipToOutline = true
@@ -354,6 +363,8 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         handler.removeCallbacks(dim)
         handler.removeCallbacks(progressTicker)
         handler.removeCallbacks(hideControls)
+        handler.removeCallbacks(backdropCopier)
+        videoBackdrop.visibility = View.GONE // render() starts the copier again
         super.onStop()
     }
 
@@ -363,6 +374,14 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         videoFrame.visibility = if (state.showsVideo) View.VISIBLE else View.INVISIBLE
         if (state.videoWidth > 0 && state.videoHeight > 0) {
             videoFrame.aspectRatio = state.videoWidth.toFloat() / state.videoHeight
+        }
+        // A portrait (or narrow) mirrored screen: fill the side bars with a blurred copy.
+        val sideBars = state.mirroring && !state.hlsVideo && state.videoWidth > 0 && state.videoHeight > 0 &&
+            state.videoWidth.toFloat() / state.videoHeight < SIDE_BARS_BELOW_ASPECT
+        if (sideBars != (videoBackdrop.visibility == View.VISIBLE)) {
+            videoBackdrop.visibility = if (sideBars) View.VISIBLE else View.GONE
+            handler.removeCallbacks(backdropCopier)
+            if (sideBars) handler.post(backdropCopier) else videoBackdrop.setImageDrawable(null)
         }
 
         val pin = state.pin
@@ -408,6 +427,29 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         if (state.active) sawSession = true
         handler.removeCallbacks(finishRunnable)
         if (!state.active) handler.postDelayed(finishRunnable, if (sawSession) 1_500L else 15_000L)
+    }
+
+    // Two small bitmaps used in turn, so the one on screen is never being written to.
+    private val backdropFrames = arrayOfNulls<Bitmap>(2)
+    private var backdropFrame = 0
+
+    /** Copies the current video frame (small) into the blurred backdrop, a few times a second. */
+    private val backdropCopier = object : Runnable {
+        override fun run() {
+            handler.postDelayed(this, BACKDROP_COPY_MS)
+            val state = AirPlaySession.state
+            if (Build.VERSION.SDK_INT < 31 || state.videoWidth <= 0 || !surfaceView.holder.surface.isValid) return
+            val height = (BACKDROP_WIDTH * state.videoHeight / state.videoWidth).coerceAtLeast(1)
+            val index = backdropFrame
+            val bitmap = backdropFrames[index]?.takeIf { it.height == height }
+                ?: Bitmap.createBitmap(BACKDROP_WIDTH, height, Bitmap.Config.ARGB_8888).also { backdropFrames[index] = it }
+            PixelCopy.request(surfaceView, bitmap, { result ->
+                if (result == PixelCopy.SUCCESS && videoBackdrop.visibility == View.VISIBLE) {
+                    videoBackdrop.setImageBitmap(bitmap)
+                    backdropFrame = 1 - index
+                }
+            }, handler)
+        }
     }
 
     // ---- TV remote ----
@@ -489,5 +531,8 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         const val DIM_AFTER_MS = 5 * 60_000L
         const val DIM_ALPHA = 0.35f
         const val CONTROLS_VISIBLE_MS = 4_000L
+        const val SIDE_BARS_BELOW_ASPECT = 1.5f // 16:9 = 1.78; 4:3 = 1.33
+        const val BACKDROP_COPY_MS = 250L
+        const val BACKDROP_WIDTH = 48
     }
 }
