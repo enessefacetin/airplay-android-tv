@@ -12,6 +12,7 @@ import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.ServiceInfo
 import android.graphics.BitmapFactory
+import android.media.AudioManager
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
@@ -28,6 +29,7 @@ import dev.matinzd.airplaytv.airplay.Dmap
 import dev.matinzd.airplaytv.airplay.HlsPlayer
 import dev.matinzd.airplaytv.airplay.MdnsAdvertiser
 import dev.matinzd.airplaytv.airplay.RemoteControl
+import dev.matinzd.airplaytv.airplay.TvVolume
 import dev.matinzd.airplaytv.airplay.VideoDecoder
 import java.io.File
 import java.security.SecureRandom
@@ -42,6 +44,14 @@ import java.util.concurrent.Executors
 class AirPlayService : Service(), AirPlayNative.Listener {
 
     private val worker = Executors.newSingleThreadExecutor()
+    private val tvVolume = TvVolume { up ->
+        worker.execute {
+            // On a playback device with HDMI-CEC volume control, Android sends this to the
+            // TV or AV receiver as a volume key.
+            getSystemService(AudioManager::class.java).adjustStreamVolume(
+                AudioManager.STREAM_MUSIC, if (up) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER, 0)
+        }
+    }
     private val main = Handler(Looper.getMainLooper())
     private lateinit var settings: ReceiverSettings
     private lateinit var advertiser: MdnsAdvertiser
@@ -218,6 +228,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         AirPlaySession.update { if (count == 0) it.endSession().copy(connections = 0) else it.copy(connections = count) }
         if (count == 0) {
             remote.clear()
+            tvVolume.reset()
             sync.reset()
             audio.stop()
             video.reset()
@@ -319,7 +330,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
     override fun onAudioFlush() = audio.flush()
 
     override fun onVolume(db: Float) {
-        val gain = AudioPlayer.airPlayGain(db)
+        val gain = if (settings.tvVolume) tvVolume.set(db) else AudioPlayer.airPlayGain(db)
         audio.setVolume(gain)
         hls.setVolume(gain)
     }

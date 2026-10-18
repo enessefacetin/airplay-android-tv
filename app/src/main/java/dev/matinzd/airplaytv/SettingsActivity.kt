@@ -32,6 +32,8 @@ class SettingsActivity : Activity() {
             { onOff(settings.allow4k) }) { settings.allow4k = !settings.allow4k; apply() }
         row(list, "Low-latency mirroring", "The picture follows your device faster. Sound can be a little behind",
             { onOff(settings.lowLatency) }) { settings.lowLatency = !settings.lowLatency; apply() }
+        row(list, "Device volume controls the TV", "The volume on your iPhone, iPad or Mac changes the TV or receiver volume. Needs HDMI-CEC volume control",
+            { onOff(settings.tvVolume) }) { settings.tvVolume = !settings.tvVolume; apply() }
         row(list, "Remembered devices", "Devices that entered the code. Select to forget them all",
             { settings.rememberedDevices.size.let { if (it == 0) "None" else "$it" } }) {
             settings.forgetAllDevices()
