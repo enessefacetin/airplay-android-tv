@@ -16,6 +16,7 @@
 #include <string>
 #include <thread>
 #include <ctime>
+#include <cstdlib>
 #include <vector>
 
 #ifdef __ANDROID__
@@ -97,18 +98,51 @@ int64_t now_ms() {
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
-/* Sender timestamps arrive as local CLOCK_REALTIME ns (UxPlay's NTP sync with the
-   client). Kotlin schedules with System.nanoTime() (CLOCK_MONOTONIC), so convert.
-   0 means "no clock sync yet": play as soon as possible. */
-int64_t to_monotonic_ns(uint64_t local_realtime_ns) {
-    if (!local_realtime_ns) return 0;
-    timespec rt{}, mono{};
-    clock_gettime(CLOCK_REALTIME, &rt);
-    clock_gettime(CLOCK_MONOTONIC, &mono);
-    int64_t now_rt = (int64_t) rt.tv_sec * 1000000000LL + rt.tv_nsec;
-    int64_t now_mono = (int64_t) mono.tv_sec * 1000000000LL + mono.tv_nsec;
-    int64_t mono_ns = (int64_t) local_realtime_ns - now_rt + now_mono;
-    return mono_ns > 0 ? mono_ns : 0;
+int64_t realtime_now_ns() {
+    timespec ts{};
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (int64_t) ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+int64_t monotonic_now_ns() {
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t) ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+/* Presentation clock, as UxPlay does it: audio and video timestamps share the
+   sender's clock (ntp_time_remote). One offset maps that clock onto
+   System.nanoTime() (CLOCK_MONOTONIC), anchored on the first packet of a session:
+   at its NTP-synced local time when that is plausible (AirPlay music: the time
+   the sender intends), otherwise at its arrival time. */
+constexpr int64_t kNoOffset = INT64_MIN;
+std::atomic<int64_t> g_remote_offset{kNoOffset};
+std::atomic<int64_t> g_last_diag_ns{0};
+
+void reset_presentation_clock() { g_remote_offset = kNoOffset; }
+
+int64_t presentation_ns(uint64_t remote_ns, uint64_t local_realtime_ns, const char *what) {
+    if (!remote_ns) return 0;
+    int64_t now_mono = monotonic_now_ns();
+    int64_t offset = g_remote_offset;
+    if (offset == kNoOffset) {
+        int64_t anchor = now_mono;
+        if (local_realtime_ns) {
+            int64_t local_mono = (int64_t) local_realtime_ns - realtime_now_ns() + now_mono;
+            if (llabs(local_mono - now_mono) < 10000000000LL) anchor = local_mono;
+        }
+        offset = anchor - (int64_t) remote_ns;
+        int64_t expected = kNoOffset;
+        if (!g_remote_offset.compare_exchange_strong(expected, offset)) offset = expected;
+        LOG_I("presentation clock anchored on %s (%s)", what,
+              anchor == now_mono ? "arrival time" : "sender's NTP time");
+    }
+    int64_t pts = (int64_t) remote_ns + offset;
+    if (now_mono - g_last_diag_ns > 5000000000LL) {
+        g_last_diag_ns = now_mono;
+        LOG_I("%s pts - now = %lld ms", what, (long long) ((pts - now_mono) / 1000000));
+    }
+    return pts > 0 ? pts : 0;
 }
 
 void detach_thread(void *) {
@@ -235,6 +269,7 @@ void cb_conn_init(void *) {
 void cb_conn_destroy(void *) {
     int n = --g_open_connections;
     if (n < 0) n = g_open_connections = 0;
+    if (n == 0) reset_presentation_clock();
     call_listener(m.onConnectionCount, (jint) n);
 }
 
@@ -250,6 +285,7 @@ void cb_conn_reset(void *, int reason) {
 /* RTSP SETUP from a client: this is the moment to wake the TV. */
 void cb_report_client_request(void *, char *deviceid, char *model, char *name, bool *admit) {
     *admit = true;
+    reset_presentation_clock();
     if (!g_listener) return;
     JNIEnv *env = get_env();
     if (!env) return;
@@ -272,13 +308,15 @@ void cb_video_process(void *, raop_ntp_t *, video_decode_struct *data) {
     JNIEnv *env = get_env();
     if (!env) return;
     jbyteArray arr = to_jbytes(env, data->data, data->data_len);
-    env->CallVoidMethod(g_listener, m.onVideoData, arr, (jlong) to_monotonic_ns(data->ntp_time_local));
+    jlong pts = presentation_ns(data->ntp_time_remote, data->ntp_time_local, "video");
+    env->CallVoidMethod(g_listener, m.onVideoData, arr, pts);
     check_exception(env);
     if (arr) env->DeleteLocalRef(arr);
 }
 
 void cb_video_reset(void *, reset_type_t type) {
     LOG_I("video_reset type=%d", (int) type);
+    reset_presentation_clock();
     if (g_raop) {
         switch (type) {
         case RESET_TYPE_NOHOLD:            // a new client took over
@@ -323,7 +361,7 @@ void cb_audio_get_format(void *, unsigned char *ct, unsigned short *spf, bool *u
 
 void cb_audio_process(void *, raop_ntp_t *, audio_decode_struct *data) {
     if (data->data_len <= 0) return;
-    int64_t pts_ns = to_monotonic_ns(data->ntp_time_local);
+    int64_t pts_ns = presentation_ns(data->ntp_time_remote, data->ntp_time_local, "audio");
     switch (data->ct) {
     case 1:  // LPCM S16LE
         call_with_bytes_ts(m.onAudioPcm, data->data, data->data_len, pts_ns);
