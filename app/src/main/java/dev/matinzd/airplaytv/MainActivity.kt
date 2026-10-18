@@ -22,6 +22,8 @@ class MainActivity : Activity() {
     private lateinit var steps: TextView
     private lateinit var footer: TextView
     private lateinit var warning: TextView
+    private lateinit var resume: TextView
+    private lateinit var settings: TextView
     private val observer: (AirPlaySession.State) -> Unit = ::render
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,10 +43,20 @@ class MainActivity : Activity() {
             addView(statusDot, LinearLayout.LayoutParams(dp(this@MainActivity, 14), dp(this@MainActivity, 14)))
             addView(status, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(this@MainActivity, 12) })
         }
-        val settings = TvUi.card(TvUi.text(this, 22f).apply {
+        resume = TvUi.card(TvUi.text(this, 22f).apply {
+            text = "Return to AirPlay"
+            setOnClickListener { openPlayback() }
+        }) as TextView
+        settings = TvUi.card(TvUi.text(this, 22f).apply {
             text = "Settings"
             setOnClickListener { startActivity(Intent(this@MainActivity, SettingsActivity::class.java)) }
-        })
+        }) as TextView
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            clipChildren = false
+            addView(resume, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(this@MainActivity, 20) })
+            addView(settings)
+        }
 
         val left = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -54,7 +66,7 @@ class MainActivity : Activity() {
             addView(name, gap(12))
             addView(steps, gap(28))
             addView(warning, gap(20))
-            addView(settings, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(this@MainActivity, 32) })
+            addView(buttons, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(this@MainActivity, 32) })
             addView(footer, gap(20))
         }
         val icon = ImageView(this).apply {
@@ -80,6 +92,17 @@ class MainActivity : Activity() {
             })
         })
         settings.requestFocus()
+        if (AirPlaySession.state.active) openPlayback()
+    }
+
+    /** Opened from the launcher again (singleTask): go straight back to a running session. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (AirPlaySession.state.active) openPlayback()
+    }
+
+    private fun openPlayback() {
+        startActivity(Intent(this, PlaybackActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     private fun gap(top: Int) = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(this@MainActivity, top) }
@@ -87,6 +110,12 @@ class MainActivity : Activity() {
     override fun onStart() {
         super.onStart()
         AirPlaySession.observe(observer)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Coming back from the AirPlay screen: offer to return to it first.
+        if (AirPlaySession.state.active) resume.requestFocus()
     }
 
     override fun onStop() {
@@ -111,6 +140,10 @@ class MainActivity : Activity() {
             "2   Select Screen Mirroring or AirPlay\n" +
             "3   Choose “${state.serverName.ifEmpty { "this TV" }}”"
         footer.text = if (state.serverRunning) "${ipAddress() ?: "No network"} · port ${state.port}" else ""
+        val wasVisible = resume.visibility == TextView.VISIBLE
+        resume.visibility = if (state.active) TextView.VISIBLE else TextView.GONE
+        if (state.active && !wasVisible) resume.requestFocus()
+        if (!state.active && wasVisible) settings.requestFocus()
         val canWake = Settings.canDrawOverlays(this)
         warning.text = if (canWake) "" else "Waking the TV from standby is not set up. Run scripts/setup-device.sh once."
         warning.visibility = if (canWake) TextView.GONE else TextView.VISIBLE
