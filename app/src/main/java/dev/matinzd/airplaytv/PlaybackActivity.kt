@@ -230,7 +230,8 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             alpha = 0f
-            clipChildren = false
+            // Room for a pressed button to grow without being clipped by the layout around it.
+            setPadding(dp(ctx, 10), dp(ctx, 10), dp(ctx, 10), dp(ctx, 10))
             addView(previousButton, LinearLayout.LayoutParams(dp(ctx, 56), dp(ctx, 56)))
             addView(playPauseButton, LinearLayout.LayoutParams(dp(ctx, 72), dp(ctx, 72)).apply {
                 marginStart = dp(ctx, 20); marginEnd = dp(ctx, 20)
@@ -239,8 +240,10 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
             addView(TvUi.text(ctx, 16f, TvUi.TEXT_DIM).apply { text = "Back to pause and close" },
                 LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(ctx, 32) })
         }
-        info.addView(controls, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { topMargin = dp(ctx, 28) })
-        info.clipChildren = false
+        info.addView(controls, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
+            topMargin = dp(ctx, 18)
+            marginStart = -dp(ctx, 10) // keep the buttons aligned with the text despite the padding
+        })
 
         musicPanel = FrameLayout(this).apply {
             setBackgroundColor(TvUi.BG)
