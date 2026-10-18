@@ -9,8 +9,17 @@ Status: accepted (2026-10-18)
   minSdk 28. No DI framework.
 - Local release builds are signed with the debug key, so release and debug install
   over each other. With `RELEASE_KEYSTORE` set (CI), the release key is used.
-- `.github/workflows/release.yml` (manual) builds a signed APK and publishes a
-  GitHub release named after `versionName`.
+- CI (`ci.yml`): unit tests, lint (errors fail) and a debug build on every push and
+  pull request; the debug APK is kept as an artifact for 14 days.
+- Releases (`release.yml`, release-please): conventional commits keep a release PR
+  with the next version and `CHANGELOG.md`. Merging it creates the tag and GitHub
+  release, then a job builds the APK signed with the release key and attaches it.
+  The version is one annotated line in `app/build.gradle.kts`; `versionCode` is
+  derived from it (1.2.3 = 10203), so every release installs over the last one.
+- Both workflows share `.github/actions/android-setup` (JDK 25, Gradle cache, NDK,
+  CMake) and cache `third_party/openssl/` by the build script's hash and NDK version.
+- Actions are pinned to their major versions; the repository setting "Allow GitHub
+  Actions to create and approve pull requests" must be on for the release PR.
 - `scripts/dev.sh [--release]` builds, installs, runs `setup-device.sh`, opens the
   app and follows logs into `build/logcat.log`.
 - Periodic sync and throughput stats log only in debug builds (`Diagnostics`).

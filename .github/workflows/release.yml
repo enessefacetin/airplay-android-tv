@@ -1,28 +1,41 @@
 name: Release
 
+# Conventional commits on main keep a release PR up to date (version bump and
+# CHANGELOG.md). Merging it tags the release; then the signed APK is attached.
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
-  release:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      created: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v5
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  apk:
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@v7
         with:
-          distribution: temurin
-          java-version: 17
+          ref: ${{ needs.release-please.outputs.tag }}
 
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: ./.github/actions/android-setup
 
-      - name: Install NDK and CMake
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.13599879" "cmake;3.22.1" > /dev/null
-
-      - name: Build release APK
+      - name: Build signed release APK
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
@@ -34,11 +47,11 @@ jobs:
           echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$RELEASE_KEYSTORE"
           ./gradlew :app:assembleRelease
 
-      - name: Publish GitHub release
+      - name: Attach APK to the release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag }}
+          VERSION: ${{ needs.release-please.outputs.version }}
         run: |
-          VERSION=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)
           cp app/build/outputs/apk/release/app-release.apk "airplay-tv-$VERSION.apk"
-          gh release create "v$VERSION" "airplay-tv-$VERSION.apk" \
-            --target "$GITHUB_SHA" --title "v$VERSION" --generate-notes
+          gh release upload "$TAG" "airplay-tv-$VERSION.apk"

@@ -68,8 +68,15 @@ instead of calling `System.nanoTime()` when timing matters (see `AvSync`).
 The first build compiles OpenSSL (`scripts/build-openssl.sh`, run by Gradle
 automatically), which takes a few minutes.
 
-Releases: run the "Release" GitHub workflow manually. It publishes a signed APK named
-after `versionName` in `app/build.gradle.kts` (bump it first).
+CI (`.github/workflows/ci.yml`) runs the unit tests, lint and a debug build on every push
+and pull request. Lint errors fail the build; keep it at 0 errors.
+
+Releases are automatic (release-please, `.github/workflows/release.yml`): conventional
+commits on `main` keep a "release PR" up to date with the version bump and
+`CHANGELOG.md`. `feat` bumps the minor version, `fix`/`perf` the patch (before 1.0).
+Merging the release PR tags it and attaches a signed APK to the GitHub release. Don't
+edit the version by hand: it is the `x-release-please-version` line in
+`app/build.gradle.kts`, and `versionCode` is computed from it.
 
 ## Working with the TV
 

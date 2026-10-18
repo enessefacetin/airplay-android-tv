@@ -15,7 +15,8 @@ Status as of 2026-10-18 (end of the first development session).
 - TV remote: play/pause, previous/next, Back (pause and close / disconnect)
 - 10-foot UI for all screens; OLED burn-in protection on the music screen
 - Keep-alive (boot receiver, START_STICKY, 15-minute job), mDNS retries
-- Manual GitHub release workflow with a signed APK
+- CI on every push and pull request (tests, lint, build); automatic releases with
+  release-please and a signed APK
 - Portrait mirroring: blurred copy of the picture in the side bars
 - Unit tests (JVM, `./gradlew :app:testDebugUnitTest`): `AvSync`, `VideoNal`, `Dmap`,
   `MdnsAdvertiser.parseTxt`, `AirPlaySession.State` (PIN, active, position)
@@ -28,9 +29,7 @@ Status as of 2026-10-18 (end of the first development session).
 
 ## Next (in suggested order)
 
-1. **CI on every push.** The release workflow is manual. Add a build (and the unit
-   tests) on push and pull requests; cache `third_party/openssl/`.
-2. **Smaller items**
+1. **Smaller items**
    - Brief "Playing audio" placeholder before track info arrives: show a skeleton
      instead.
    - Show the paired-device names in Settings, and forget them one by one.

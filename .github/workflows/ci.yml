@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/android-setup
+
+      - name: Unit tests, lint and debug build
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+
+      - name: Upload reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reports
+          path: app/build/reports/
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: airplay-tv-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14

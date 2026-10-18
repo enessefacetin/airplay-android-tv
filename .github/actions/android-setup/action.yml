@@ -1,0 +1,22 @@
+name: Android build setup
+description: JDK, Gradle (cached), NDK and CMake, and the cached OpenSSL build
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@v6
+      with:
+        distribution: temurin
+        java-version: 25
+
+    - uses: gradle/actions/setup-gradle@v6
+
+    - name: Install NDK and CMake
+      shell: bash
+      run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.13599879" "cmake;3.22.1" > /dev/null
+
+    # OpenSSL takes minutes to build; it only changes with the script or the NDK.
+    - uses: actions/cache@v6
+      with:
+        path: third_party/openssl
+        key: openssl-${{ hashFiles('scripts/build-openssl.sh') }}-ndk29.0.13599879

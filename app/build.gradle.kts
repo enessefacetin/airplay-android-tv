@@ -2,6 +2,13 @@ plugins {
     id("com.android.application")
 }
 
+// Bumped by release-please on each release (release-please-config.json).
+val appVersion = "0.1.0" // x-release-please-version
+// 1.2.3 -> 10203, so every release installs over the previous one.
+val appVersionCode = appVersion.split(".").map(String::toInt).let { (major, minor, patch) ->
+    major * 10_000 + minor * 100 + patch
+}
+
 // The Streamer runs a 32-bit userspace (ro.product.cpu.abi = armeabi-v7a).
 val targetAbis = listOf("armeabi-v7a")
 
@@ -14,8 +21,8 @@ android {
         applicationId = "dev.matinzd.airplaytv"
         minSdk = 28
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionName = appVersion
+        versionCode = appVersionCode
         ndk { abiFilters += targetAbis }
         externalNativeBuild {
             cmake { arguments += listOf("-DANDROID_STL=c++_static") }
