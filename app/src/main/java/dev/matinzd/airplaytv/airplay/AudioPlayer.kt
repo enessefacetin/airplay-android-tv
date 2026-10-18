@@ -7,6 +7,7 @@ import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Process
@@ -213,6 +214,12 @@ class AudioPlayer(private val sync: AvSync) {
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
             .also {
+                // A streaming track only starts once its buffer is full, unless told
+                // otherwise: with a 3 s buffer that held music back for 3 s (and gave no
+                // timestamps meanwhile). Start as soon as one device buffer is queued.
+                if (Build.VERSION.SDK_INT >= 31) {
+                    it.setStartThresholdInFrames(minBuffer / BYTES_PER_FRAME)
+                }
                 it.setVolume(gain)
                 it.play()
             }
