@@ -19,7 +19,10 @@ import java.nio.ByteBuffer
  * keyframe at the start and on rotation. So every frame since the last
  * keyframe is kept and replayed into the decoder once a Surface is attached.
  */
-class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
+class VideoDecoder(
+    private val sync: AvSync,
+    private val onVideoSize: (width: Int, height: Int) -> Unit,
+) {
     private val lock = Any()
     private val thread = HandlerThread("video-decoder").apply { start() }
     private val handler = Handler(thread.looper)
@@ -30,14 +33,18 @@ class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
     private var pps: ByteArray? = null
     private var errorRetries = 0
 
-    private val gop = ArrayList<ByteArray>()      // frames since the last keyframe
+    private class Frame(val data: ByteArray, val ptsNs: Long)
+
+    private val gop = ArrayList<Frame>()          // frames since the last keyframe
     private var gopBytes = 0L
     private var gopOverflow = false
-    private val pending = ArrayDeque<ByteArray>() // waiting for a decoder input buffer
+    private val pending = ArrayDeque<Frame>()     // waiting for a decoder input buffer
     private val stats = Stats()
     private val freeInputs = ArrayDeque<Int>()
 
-    fun onFrame(data: ByteArray) {
+    /** [ptsNs]: sender timestamp on the System.nanoTime() clock, or 0 if unknown. */
+    fun onFrame(data: ByteArray, ptsNs: Long) {
+        val frame = Frame(data, ptsNs)
         var toRelease: MediaCodec? = null
         synchronized(lock) {
             var keyframe = false
@@ -71,14 +78,14 @@ class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
                     gopBytes = 0
                     gopOverflow = true
                 } else {
-                    gop += data
+                    gop += frame
                     gopBytes += data.size
                 }
             }
 
             val c = codec
             if (c != null) {
-                pending.addLast(data)
+                pending.addLast(frame)
                 feedLocked(c)
             } else if (toRelease == null) {
                 startCodecLocked()
@@ -176,13 +183,14 @@ class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
             try {
                 val buffer = c.getInputBuffer(index) ?: continue
                 buffer.clear()
-                if (frame.size > buffer.remaining()) {
-                    Log.w(TAG, "frame of ${frame.size} bytes too large, dropped")
+                if (frame.data.size > buffer.remaining()) {
+                    Log.w(TAG, "frame of ${frame.data.size} bytes too large, dropped")
                     c.queueInputBuffer(index, 0, 0, 0, 0)
                     continue
                 }
-                buffer.put(frame)
-                c.queueInputBuffer(index, 0, frame.size, System.nanoTime() / 1000, 0)
+                buffer.put(frame.data)
+                // The sender timestamp travels through the decoder as the pts.
+                c.queueInputBuffer(index, 0, frame.data.size, frame.ptsNs / 1000, 0)
                 stats.queued(pending.size)
             } catch (e: IllegalStateException) {
                 return // codec is being released
@@ -216,9 +224,18 @@ class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
         }
 
         override fun onOutputBufferAvailable(c: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
-            stats.decoded(System.nanoTime() / 1000 - info.presentationTimeUs)
+            val now = System.nanoTime()
+            val ptsNs = info.presentationTimeUs * 1000
+            var renderAtNs = 0L
+            if (ptsNs > 0) {
+                sync.reportVideo(now - ptsNs)
+                val target = ptsNs + sync.latencyNs
+                // Schedule on the shared timeline; frames that are already late show at once.
+                if (target - now in MIN_SCHEDULE_NS..MAX_SCHEDULE_NS) renderAtNs = target
+                stats.rendered(now - ptsNs, if (renderAtNs != 0L) renderAtNs - now else 0L)
+            }
             try {
-                c.releaseOutputBuffer(index, true) // render immediately: lowest latency
+                if (renderAtNs != 0L) c.releaseOutputBuffer(index, renderAtNs) else c.releaseOutputBuffer(index, true)
             } catch (_: IllegalStateException) {
             }
         }
@@ -248,29 +265,33 @@ class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
         }
     }
 
-    /** Logs throughput and time-in-decoder every few seconds. */
+    /** Logs throughput, how late frames arrive, and how long they wait for their slot. */
     private class Stats {
         private var windowStart = System.nanoTime()
         private var received = 0
-        private var decoded = 0
+        private var rendered = 0
         private var maxBacklog = 0
-        private var latencySumUs = 0L
-        private var latencyMaxUs = 0L
+        private var lateSumNs = 0L
+        private var lateMaxNs = 0L
+        private var holdSumNs = 0L
 
         @Synchronized fun received() { received++ }
         @Synchronized fun queued(backlog: Int) { if (backlog > maxBacklog) maxBacklog = backlog }
 
-        @Synchronized fun decoded(latencyUs: Long) {
-            decoded++
-            latencySumUs += latencyUs
-            if (latencyUs > latencyMaxUs) latencyMaxUs = latencyUs
+        /** [lateNs]: decoded this long after its timestamp; [holdNs]: then held this long. */
+        @Synchronized fun rendered(lateNs: Long, holdNs: Long) {
+            rendered++
+            lateSumNs += lateNs
+            if (lateNs > lateMaxNs) lateMaxNs = lateNs
+            holdSumNs += holdNs
             val elapsed = System.nanoTime() - windowStart
             if (elapsed >= 5_000_000_000L) {
                 val secs = elapsed / 1e9
-                Log.i(TAG, "in %.1f fps, out %.1f fps, decode latency avg %d ms / max %d ms, backlog max %d".format(
-                    received / secs, decoded / secs, latencySumUs / decoded / 1000, latencyMaxUs / 1000, maxBacklog))
+                Log.i(TAG, "in %.1f fps, out %.1f fps, ready after avg %d / max %d ms, held avg %d ms, backlog max %d".format(
+                    received / secs, rendered / secs, lateSumNs / rendered / 1_000_000, lateMaxNs / 1_000_000,
+                    holdSumNs / rendered / 1_000_000, maxBacklog))
                 windowStart = System.nanoTime()
-                received = 0; decoded = 0; maxBacklog = 0; latencySumUs = 0; latencyMaxUs = 0
+                received = 0; rendered = 0; maxBacklog = 0; lateSumNs = 0; lateMaxNs = 0; holdSumNs = 0
             }
         }
     }
@@ -278,5 +299,7 @@ class VideoDecoder(private val onVideoSize: (width: Int, height: Int) -> Unit) {
     private companion object {
         const val TAG = "VideoDecoder"
         const val MAX_GOP_BYTES = 48L * 1024 * 1024
+        const val MIN_SCHEDULE_NS = 2_000_000L     // closer than this: just render now
+        const val MAX_SCHEDULE_NS = 500_000_000L   // further than this: timestamps are off, render now
     }
 }

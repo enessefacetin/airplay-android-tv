@@ -2,6 +2,7 @@ package dev.matinzd.airplaytv.airplay
 
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioTimestamp
 import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
@@ -18,20 +19,31 @@ import kotlin.math.pow
  * Plays AirPlay audio through an AudioTrack. ALAC/PCM arrive already decoded;
  * AAC (AAC-ELD while mirroring) is decoded with MediaCodec.
  *
+ * Every packet is played at `sender timestamp + sync latency` (see [AvSync]):
+ * if a packet would be heard too early, silence is inserted first; if it would
+ * be heard too late, it's dropped. That keeps audio on the same timeline as the
+ * video and absorbs clock drift between the iPhone and the TV.
+ *
  * Everything runs on one audio thread so the network threads never block.
  */
-class AudioPlayer {
+class AudioPlayer(private val sync: AvSync) {
     private val thread = HandlerThread("airplay-audio", Process.THREAD_PRIORITY_URGENT_AUDIO).apply { start() }
     private val handler = Handler(thread.looper)
     private val queued = AtomicInteger()
 
     private var track: AudioTrack? = null
     private var aac: MediaCodec? = null
-    private var aacPts = 0L
+    private var aacPtsUs = 0L
     private var samplesPerFrame = 1024
     private var gain = 1f
     private val info = MediaCodec.BufferInfo()
     private var pcmScratch = ByteArray(0)
+
+    // Where the AudioTrack is: frames written so far, and its output pipeline latency.
+    private var framesWritten = 0L
+    private var pipelineNs = -1L
+    private val timestamp = AudioTimestamp()
+    private val stats = Stats()
 
     fun configure(ct: Int, samplesPerFrame: Int, lowLatency: Boolean) = post {
         releaseLocked()
@@ -42,14 +54,17 @@ class AudioPlayer {
         }
     }
 
-    fun playPcm(data: ByteArray) = postData { track?.write(data, 0, data.size) }
+    /** [ptsNs]: sender timestamp on the System.nanoTime() clock, or 0 if unknown. */
+    fun playPcm(data: ByteArray, ptsNs: Long) = postData { writeSynced(data, 0, data.size, ptsNs) }
 
-    fun playAac(data: ByteArray) = postData { decodeAac(data) }
+    fun playAac(data: ByteArray, ptsNs: Long) = postData { decodeAac(data, ptsNs) }
 
     fun flush() = post {
         track?.apply { pause(); flush(); play() }
         runCatching { aac?.flush() }
-        aacPts = 0
+        aacPtsUs = 0
+        framesWritten = 0
+        pipelineNs = -1
     }
 
     fun setVolume(gain: Float) = post {
@@ -78,10 +93,72 @@ class AudioPlayer {
         }
     }
 
+    private fun writeSynced(pcm: ByteArray, offset: Int, length: Int, ptsNs: Long) {
+        val t = track ?: return
+        val frames = length / BYTES_PER_FRAME
+        if (ptsNs > 0) {
+            val now = System.nanoTime()
+            val heardAtNs = nextFrameHeardAtNs(t, now)
+            if (heardAtNs != null) {
+                if (pipelineNs >= 0) sync.reportAudio(now - ptsNs + pipelineNs)
+                val error = heardAtNs - (ptsNs + sync.latencyNs) // > 0: late, < 0: early
+                when {
+                    error > MAX_LATE_NS -> {
+                        stats.dropped++
+                        return
+                    }
+                    error < -MAX_EARLY_NS -> {
+                        val silence = ((-error) * SAMPLE_RATE / 1_000_000_000L).toInt()
+                            .coerceAtMost(SAMPLE_RATE * 3)
+                        writeSilence(t, silence)
+                        stats.silenceFrames += silence
+                    }
+                }
+                stats.error(error)
+            }
+        }
+        t.write(pcm, offset, length)
+        framesWritten += frames
+    }
+
+    /**
+     * When the next frame written now would be heard, from the track's latest
+     * timestamp. Also measures the output pipeline latency once per track, while
+     * the queue still holds only what arrived naturally.
+     */
+    private fun nextFrameHeardAtNs(t: AudioTrack, now: Long): Long? {
+        if (!t.getTimestamp(timestamp) || timestamp.framePosition <= 0) return null
+        val framesAhead = framesWritten - timestamp.framePosition
+        val heardAt = timestamp.nanoTime + framesAhead * 1_000_000_000L / SAMPLE_RATE
+        if (pipelineNs < 0) {
+            pipelineNs = (heardAt - now).coerceAtLeast(0)
+            Log.i(TAG, "audio output pipeline latency ${pipelineNs / AvSync.MS} ms")
+        }
+        return heardAt
+    }
+
+    private fun writeSilence(t: AudioTrack, frames: Int) {
+        var remaining = frames * BYTES_PER_FRAME
+        val zeros = ByteArray(minOf(remaining, 16 * 1024))
+        while (remaining > 0) {
+            val n = minOf(remaining, zeros.size)
+            val written = t.write(zeros, 0, n)
+            if (written <= 0) return
+            remaining -= written
+        }
+        framesWritten += frames
+    }
+
     private fun createTrack(lowLatency: Boolean): AudioTrack {
         val minBuffer = AudioTrack.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT,
         )
+        // Room to hold audio until its presentation time: up to the sync latency while
+        // mirroring, about 2 s for AirPlay music.
+        val bufferBytes = if (lowLatency) maxOf(minBuffer * 2, SAMPLE_RATE * BYTES_PER_FRAME / 2)
+        else SAMPLE_RATE * BYTES_PER_FRAME * 3
+        framesWritten = 0
+        pipelineNs = -1
         return AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -96,9 +173,8 @@ class AudioPlayer {
                     .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                     .build(),
             )
-            .setBufferSizeInBytes(if (lowLatency) minBuffer * 2 else maxOf(minBuffer * 4, SAMPLE_RATE))
+            .setBufferSizeInBytes(bufferBytes)
             .setTransferMode(AudioTrack.MODE_STREAM)
-            .apply { if (lowLatency) setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY) }
             .build()
             .also {
                 it.setVolume(gain)
@@ -135,14 +211,16 @@ class AudioPlayer {
         return null
     }
 
-    private fun decodeAac(data: ByteArray) {
+    private fun decodeAac(data: ByteArray, ptsNs: Long) {
         val codec = aac ?: return
         try {
             val inIndex = codec.dequeueInputBuffer(10_000)
             if (inIndex >= 0) {
                 codec.getInputBuffer(inIndex)?.apply { clear(); put(data) }
-                codec.queueInputBuffer(inIndex, 0, data.size, aacPts, 0)
-                aacPts += samplesPerFrame * 1_000_000L / SAMPLE_RATE
+                // The sender timestamp travels through the decoder; fall back to a counter.
+                val ptsUs = if (ptsNs > 0) ptsNs / 1000 else aacPtsUs
+                codec.queueInputBuffer(inIndex, 0, data.size, ptsUs, 0)
+                aacPtsUs = ptsUs + samplesPerFrame * 1_000_000L / SAMPLE_RATE
             }
             while (true) {
                 val outIndex = codec.dequeueOutputBuffer(info, 0)
@@ -153,7 +231,7 @@ class AudioPlayer {
                     if (pcmScratch.size < info.size) pcmScratch = ByteArray(info.size)
                     out.position(info.offset)
                     out.get(pcmScratch, 0, info.size)
-                    track?.write(pcmScratch, 0, info.size)
+                    writeSynced(pcmScratch, 0, info.size, if (ptsNs > 0) info.presentationTimeUs * 1000 else 0)
                 }
                 codec.releaseOutputBuffer(outIndex, false)
             }
@@ -173,7 +251,28 @@ class AudioPlayer {
             it.release()
         }
         track = null
-        aacPts = 0
+        aacPtsUs = 0
+    }
+
+    /** Logs how far audio was from its slot, and the corrections made. */
+    private class Stats {
+        var dropped = 0
+        var silenceFrames = 0L
+        private var count = 0
+        private var errorSumNs = 0L
+        private var windowStart = System.nanoTime()
+
+        fun error(errorNs: Long) {
+            count++
+            errorSumNs += errorNs
+            val elapsed = System.nanoTime() - windowStart
+            if (elapsed >= 5_000_000_000L) {
+                Log.i(TAG, "sync error avg %d ms, dropped %d packets, inserted %d ms silence".format(
+                    errorSumNs / count / AvSync.MS, dropped, silenceFrames * 1000 / SAMPLE_RATE))
+                windowStart = System.nanoTime()
+                count = 0; errorSumNs = 0; dropped = 0; silenceFrames = 0
+            }
+        }
     }
 
     companion object {
@@ -182,6 +281,9 @@ class AudioPlayer {
 
         private const val TAG = "AudioPlayer"
         private const val SAMPLE_RATE = 44100
-        private const val MAX_QUEUED = 100
+        private const val BYTES_PER_FRAME = 4
+        private const val MAX_QUEUED = 400
+        private const val MAX_LATE_NS = 25 * AvSync.MS
+        private const val MAX_EARLY_NS = 15 * AvSync.MS
     }
 }

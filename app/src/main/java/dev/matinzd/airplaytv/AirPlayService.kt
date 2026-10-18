@@ -20,6 +20,7 @@ import android.provider.Settings
 import android.util.Log
 import dev.matinzd.airplaytv.airplay.AirPlayNative
 import dev.matinzd.airplaytv.airplay.AudioPlayer
+import dev.matinzd.airplaytv.airplay.AvSync
 import dev.matinzd.airplaytv.airplay.Dmap
 import dev.matinzd.airplaytv.airplay.HlsPlayer
 import dev.matinzd.airplaytv.airplay.MdnsAdvertiser
@@ -41,8 +42,9 @@ class AirPlayService : Service(), AirPlayNative.Listener {
     private lateinit var cpuLock: PowerManager.WakeLock
     private var wifiLock: WifiManager.WifiLock? = null
 
-    private val audio = AudioPlayer()
-    private val video = VideoDecoder { width, height ->
+    private val sync = AvSync()
+    private val audio = AudioPlayer(sync)
+    private val video = VideoDecoder(sync) { width, height ->
         AirPlaySession.update { it.copy(videoWidth = width, videoHeight = height) }
     }
     private lateinit var hls: HlsPlayer
@@ -168,12 +170,14 @@ class AirPlayService : Service(), AirPlayNative.Listener {
     override fun onClientRequest(deviceId: String?, model: String?, name: String?) {
         Log.i(TAG, "AirPlay session from $name ($model)")
         AirPlaySession.update { it.copy(clientName = name ?: "iPhone", clientModel = model) }
+        sync.reset()
         TvWaker.wake(this)
     }
 
     override fun onConnectionCount(count: Int) {
         AirPlaySession.update { if (count == 0) it.endSession().copy(connections = 0) else it.copy(connections = count) }
         if (count == 0) {
+            sync.reset()
             audio.stop()
             video.reset()
             hls.stop()
@@ -185,9 +189,9 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         Log.w(TAG, "connection lost (reason $reason)")
     }
 
-    override fun onVideoData(data: ByteArray, ntpUs: Long) {
+    override fun onVideoData(data: ByteArray, ptsNs: Long) {
         if (!AirPlaySession.state.mirroring) AirPlaySession.update { it.copy(mirroring = true, audioOnly = false) }
-        video.onFrame(data)
+        video.onFrame(data, ptsNs)
     }
 
     override fun onVideoReset(type: Int) {
@@ -220,9 +224,9 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         AirPlaySession.update { it.copy(audioOnly = !usingScreen && !it.showsVideo) }
     }
 
-    override fun onAudioPcm(data: ByteArray) = audio.playPcm(data)
+    override fun onAudioPcm(data: ByteArray, ptsNs: Long) = audio.playPcm(data, ptsNs)
 
-    override fun onAudioAac(data: ByteArray) = audio.playAac(data)
+    override fun onAudioAac(data: ByteArray, ptsNs: Long) = audio.playAac(data, ptsNs)
 
     override fun onAudioFlush() = audio.flush()
 

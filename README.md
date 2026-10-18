@@ -17,6 +17,10 @@ turns on the TV and switches to its input. Turning the TV off ends the session.
 - **AirPlay video** (YouTube's AirPlay button, Safari video): UxPlay fetches the HLS playlists through
   the iPhone and serves them on `http://localhost:7000/`; `HlsPlayer` plays that with Media3 ExoPlayer
   and follows play/pause/seek/stop from the iPhone.
+- **Lip-sync:** audio and video carry the sender's timestamps (NTP-synced by UxPlay). `AvSync` picks
+  one latency from what each stream needs; video frames are scheduled with
+  `releaseOutputBuffer(index, timeNs)` and audio inserts silence or drops packets to stay on the same
+  timeline. AirPlay music plays at the exact time the sender intends (about 2 s after it arrives).
 - **Wake on AirPlay:** `AirPlayService` is a foreground service holding a partial wake lock. On RTSP
   SETUP it turns the screen on and opens `PlaybackActivity`.
 
@@ -37,7 +41,6 @@ notifications.
 
 - No FairPlay-protected video (Apple TV+, Netflix casting). Screen mirroring works everywhere.
 - H.264 only (no HEVC), mirroring at up to 1080p60.
-- Audio and video are played as soon as they arrive, without NTP-based A/V sync.
 
 ## Licence
 

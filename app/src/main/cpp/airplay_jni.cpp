@@ -15,6 +15,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <ctime>
 #include <vector>
 
 #ifdef __ANDROID__
@@ -96,6 +97,20 @@ int64_t now_ms() {
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
+/* Sender timestamps arrive as local CLOCK_REALTIME ns (UxPlay's NTP sync with the
+   client). Kotlin schedules with System.nanoTime() (CLOCK_MONOTONIC), so convert.
+   0 means "no clock sync yet": play as soon as possible. */
+int64_t to_monotonic_ns(uint64_t local_realtime_ns) {
+    if (!local_realtime_ns) return 0;
+    timespec rt{}, mono{};
+    clock_gettime(CLOCK_REALTIME, &rt);
+    clock_gettime(CLOCK_MONOTONIC, &mono);
+    int64_t now_rt = (int64_t) rt.tv_sec * 1000000000LL + rt.tv_nsec;
+    int64_t now_mono = (int64_t) mono.tv_sec * 1000000000LL + mono.tv_nsec;
+    int64_t mono_ns = (int64_t) local_realtime_ns - now_rt + now_mono;
+    return mono_ns > 0 ? mono_ns : 0;
+}
+
 void detach_thread(void *) {
     if (g_vm) g_vm->DetachCurrentThread();
 }
@@ -148,6 +163,16 @@ void call_with_bytes(jmethodID method, const void *data, int len) {
     if (!env) return;
     jbyteArray arr = to_jbytes(env, data, len);
     env->CallVoidMethod(g_listener, method, arr);
+    check_exception(env);
+    if (arr) env->DeleteLocalRef(arr);
+}
+
+void call_with_bytes_ts(jmethodID method, const void *data, int len, int64_t pts_ns) {
+    if (!g_listener) return;
+    JNIEnv *env = get_env();
+    if (!env) return;
+    jbyteArray arr = to_jbytes(env, data, len);
+    env->CallVoidMethod(g_listener, method, arr, (jlong) pts_ns);
     check_exception(env);
     if (arr) env->DeleteLocalRef(arr);
 }
@@ -247,7 +272,7 @@ void cb_video_process(void *, raop_ntp_t *, video_decode_struct *data) {
     JNIEnv *env = get_env();
     if (!env) return;
     jbyteArray arr = to_jbytes(env, data->data, data->data_len);
-    env->CallVoidMethod(g_listener, m.onVideoData, arr, (jlong) (data->ntp_time_remote / 1000));
+    env->CallVoidMethod(g_listener, m.onVideoData, arr, (jlong) to_monotonic_ns(data->ntp_time_local));
     check_exception(env);
     if (arr) env->DeleteLocalRef(arr);
 }
@@ -298,9 +323,10 @@ void cb_audio_get_format(void *, unsigned char *ct, unsigned short *spf, bool *u
 
 void cb_audio_process(void *, raop_ntp_t *, audio_decode_struct *data) {
     if (data->data_len <= 0) return;
+    int64_t pts_ns = to_monotonic_ns(data->ntp_time_local);
     switch (data->ct) {
     case 1:  // LPCM S16LE
-        call_with_bytes(m.onAudioPcm, data->data, data->data_len);
+        call_with_bytes_ts(m.onAudioPcm, data->data, data->data_len, pts_ns);
         break;
     case 2: {  // ALAC -> PCM
         std::lock_guard<std::mutex> lock(g_alac_mutex);
@@ -309,13 +335,13 @@ void cb_audio_process(void *, raop_ntp_t *, audio_decode_struct *data) {
         BitBufferInit(&bits, data->data, (uint32_t) data->data_len);
         uint32_t frames = 0;
         if (g_alac->Decode(&bits, g_pcm.data(), kAlacFramesPerPacket, kChannels, &frames) == 0 && frames) {
-            call_with_bytes(m.onAudioPcm, g_pcm.data(), (int) (frames * kChannels * 2));
+            call_with_bytes_ts(m.onAudioPcm, g_pcm.data(), (int) (frames * kChannels * 2), pts_ns);
         }
         break;
     }
     case 4:  // AAC-LC
     case 8:  // AAC-ELD (screen mirroring)
-        call_with_bytes(m.onAudioAac, data->data, data->data_len);
+        call_with_bytes_ts(m.onAudioAac, data->data, data->data_len, pts_ns);
         break;
     default:
         break;
@@ -452,8 +478,8 @@ jint native_start(JNIEnv *env, jclass, jobject listener, jstring jname, jbyteArr
     m.onVideoReset = env->GetMethodID(cls, "onVideoReset", "(I)V");
     m.onVideoFlush = env->GetMethodID(cls, "onVideoFlush", "()V");
     m.onAudioFormat = env->GetMethodID(cls, "onAudioFormat", "(IIZZ)V");
-    m.onAudioPcm = env->GetMethodID(cls, "onAudioPcm", "([B)V");
-    m.onAudioAac = env->GetMethodID(cls, "onAudioAac", "([B)V");
+    m.onAudioPcm = env->GetMethodID(cls, "onAudioPcm", "([BJ)V");
+    m.onAudioAac = env->GetMethodID(cls, "onAudioAac", "([BJ)V");
     m.onAudioFlush = env->GetMethodID(cls, "onAudioFlush", "()V");
     m.onVolume = env->GetMethodID(cls, "onVolume", "(F)V");
     m.onCoverArt = env->GetMethodID(cls, "onCoverArt", "([B)V");

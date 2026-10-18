@@ -34,16 +34,19 @@ object AirPlayNative {
         /** Clients were dropped (0 = nativeDisconnect, 1 = client stopped responding); the server keeps listening. */
         fun onConnectionLost(reason: Int)
 
-        /** One H.264 access unit in Annex-B format. */
-        fun onVideoData(data: ByteArray, ntpUs: Long)
+        /**
+         * One H.264 access unit in Annex-B format. [ptsNs] is the sender's timestamp
+         * on the System.nanoTime() clock (0 until clock sync is established).
+         */
+        fun onVideoData(data: ByteArray, ptsNs: Long)
         fun onVideoReset(type: Int)
         fun onVideoFlush()
 
         fun onAudioFormat(ct: Int, samplesPerFrame: Int, usingScreen: Boolean, isMedia: Boolean)
-        /** Decoded 44.1 kHz stereo S16LE (ALAC is decoded natively). */
-        fun onAudioPcm(data: ByteArray)
-        /** One raw AAC frame (AAC-ELD while mirroring). */
-        fun onAudioAac(data: ByteArray)
+        /** Decoded 44.1 kHz stereo S16LE (ALAC is decoded natively). [ptsNs] as for video. */
+        fun onAudioPcm(data: ByteArray, ptsNs: Long)
+        /** One raw AAC frame (AAC-ELD while mirroring). [ptsNs] as for video. */
+        fun onAudioAac(data: ByteArray, ptsNs: Long)
         fun onAudioFlush()
         /** AirPlay volume in dB: -30..0, or -144 for mute. */
         fun onVolume(db: Float)
