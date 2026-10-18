@@ -65,6 +65,14 @@ object AirPlayNative {
         fun onVideoPlaylistRemove(): Float
         /** [duration, position, seekStart, seekDuration, rate, stillPlaying, bufferEmpty, bufferFull] */
         fun onVideoPlaybackInfo(): DoubleArray
+
+        // PIN pairing
+        /** A new device is pairing: show this 4-digit PIN on the TV. */
+        fun onDisplayPin(pin: String?)
+        /** A device was admitted; remember its public key so it can reconnect without a PIN. */
+        fun onRegisterClient(deviceId: String?, publicKey: String?, name: String?)
+        /** A returning device: did it pair with us before? */
+        fun isClientRegistered(publicKey: String): Boolean
     }
 
     @JvmStatic
@@ -78,6 +86,10 @@ object AirPlayNative {
         fps: Int,
         /** BCP-47 tag used to pick HLS audio/subtitle tracks, e.g. "sv-SE" */
         language: String,
+        /** New devices must enter a PIN shown on the TV. */
+        requirePin: Boolean,
+        /** Offer H.265 (4K) mirroring. */
+        allowH265: Boolean,
         debug: Boolean,
     ): Int
 

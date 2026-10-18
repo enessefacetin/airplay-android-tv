@@ -75,6 +75,7 @@ struct {
     jmethodID onAudioFormat, onAudioPcm, onAudioAac, onAudioFlush;
     jmethodID onVolume, onCoverArt, onMetadata;
     jmethodID onVideoPlay, onVideoScrub, onVideoRate, onVideoStop, onVideoPlaylistRemove, onVideoPlaybackInfo;
+    jmethodID onDisplayPin, onRegisterClient, isClientRegistered;
 } m;
 
 /* raop keeps these pointers, so they must outlive the server. */
@@ -431,10 +432,45 @@ void cb_audio_set_metadata(void *, const void *buffer, int buflen) {
     call_with_bytes(m.onMetadata, buffer, buflen);
 }
 
-void cb_register_client(void *, const char *, const char *, const char *) {}
-bool cb_check_register(void *, const char *) { return true; }
+/* ---- PIN pairing ----
+   With a PIN required, a new device must enter a 4-digit code shown on the TV. It is
+   then remembered (by its public key) and reconnects without a code. */
+void cb_register_client(void *, const char *device_id, const char *pk, const char *name) {
+    if (!g_listener || !pk) return;
+    JNIEnv *env = get_env();
+    if (!env) return;
+    jstring jd = to_jstring(env, device_id), jp = to_jstring(env, pk), jn = to_jstring(env, name);
+    env->CallVoidMethod(g_listener, m.onRegisterClient, jd, jp, jn);
+    check_exception(env);
+    if (jd) env->DeleteLocalRef(jd);
+    if (jp) env->DeleteLocalRef(jp);
+    if (jn) env->DeleteLocalRef(jn);
+}
+
+/* A returning device (pair-verify without a new PIN): is it one we registered? */
+bool cb_check_register(void *, const char *pk) {
+    if (!g_listener || !pk) return false;
+    JNIEnv *env = get_env();
+    if (!env) return false;
+    jstring jp = env->NewStringUTF(pk);
+    jboolean known = env->CallBooleanMethod(g_listener, m.isClientRegistered, jp);
+    check_exception(env);
+    env->DeleteLocalRef(jp);
+    return known;
+}
+
 const char *cb_passwd(void *, int *len) { *len = 0; return nullptr; }
-void cb_display_pin(void *, char *) {}
+
+void cb_display_pin(void *, char *pin) {
+    LOG_I("PIN requested by a new device");
+    if (!g_listener) return;
+    JNIEnv *env = get_env();
+    if (!env) return;
+    jstring jp = to_jstring(env, pin);
+    env->CallVoidMethod(g_listener, m.onDisplayPin, jp);
+    check_exception(env);
+    if (jp) env->DeleteLocalRef(jp);
+}
 void cb_export_dacp(void *, const char *, const char *) {}
 void cb_mirror_video_running(void *, bool) {}
 void cb_video_report_size(void *, float *, float *, float *, float *) {}
@@ -498,14 +534,15 @@ void cb_on_video_acquire_playback_info(void *, playback_info_t *info) {
 
 /* ---- server lifecycle ----------------------------------------------------- */
 
-void set_features(dnssd_t *d) {
-    /* UxPlay's start_dnssd() defaults with HLS ("-hls") and H.265 ("-h265") on, and
-       AirPlay 2 pairing rather than legacy pairing. */
+void set_features(dnssd_t *d, bool pin, bool h265) {
+    /* UxPlay's start_dnssd() defaults with HLS ("-hls"), plus optional H.265 ("-h265")
+       and PIN pairing ("-pin"). */
     static const int on_bits[] = {0 /* video */, 1, 2, 4 /* HLS */, 5, 6, 7, 9, 10, 11, 12, 13,
-                                  14, 15, 16, 17, 18, 19, 20, 21, 22, 25, 28, 30,
-                                  42 /* screen multi-codec: H.265 (4K) mirroring */};
+                                  14, 15, 16, 17, 18, 19, 20, 21, 22, 25, 28, 30};
     for (int bit = 0; bit < 64; bit++) dnssd_set_airplay_features(d, bit, 0);
     for (int bit : on_bits) dnssd_set_airplay_features(d, bit, 1);
+    dnssd_set_airplay_features(d, 27, pin);   // legacy pairing: needed for PIN pairing (UxPlay -pin)
+    dnssd_set_airplay_features(d, 42, h265);  // screen multi-codec: H.265 (4K) mirroring
 }
 
 void stop_server_locked() {
@@ -527,7 +564,8 @@ void stop_watchdog() {
 /* ---- JNI entry points ------------------------------------------------------ */
 
 jint native_start(JNIEnv *env, jclass, jobject listener, jstring jname, jbyteArray jhw,
-                  jstring jkeyfile, jint width, jint height, jint fps, jstring jlang, jboolean debug) {
+                  jstring jkeyfile, jint width, jint height, jint fps, jstring jlang,
+                  jboolean pin, jboolean h265, jboolean debug) {
     std::lock_guard<std::mutex> lock(g_server_mutex);
     if (g_raop) return 0;
 
@@ -555,6 +593,10 @@ jint native_start(JNIEnv *env, jclass, jobject listener, jstring jname, jbyteArr
     m.onVideoStop = env->GetMethodID(cls, "onVideoStop", "()V");
     m.onVideoPlaylistRemove = env->GetMethodID(cls, "onVideoPlaylistRemove", "()F");
     m.onVideoPlaybackInfo = env->GetMethodID(cls, "onVideoPlaybackInfo", "()[D");
+    m.onDisplayPin = env->GetMethodID(cls, "onDisplayPin", "(Ljava/lang/String;)V");
+    m.onRegisterClient = env->GetMethodID(cls, "onRegisterClient",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
+    m.isClientRegistered = env->GetMethodID(cls, "isClientRegistered", "(Ljava/lang/String;)Z");
     env->DeleteLocalRef(cls);
     if (env->ExceptionCheck()) {  // a listener method is missing
         env->ExceptionDescribe();
@@ -580,9 +622,10 @@ jint native_start(JNIEnv *env, jclass, jobject listener, jstring jname, jbyteArr
     raop_callbacks_t cbs;
     memset(&cbs, 0, sizeof(cbs));
 
-    g_dnssd = dnssd_init(name, (int) strlen(name), hw.data(), (int) hw.size(), 0, &err);
+    // pin_pw 1: on-screen PIN for new devices (advertised as pw=true in the TXT records)
+    g_dnssd = dnssd_init(name, (int) strlen(name), hw.data(), (int) hw.size(), pin ? 1 : 0, &err);
     if (err || !g_dnssd) { LOG_E("dnssd_init failed: %d", err); rc = -2; goto done; }
-    set_features(g_dnssd);
+    set_features(g_dnssd, pin, h265);
 
     cbs.conn_init = cb_conn_init;
     cbs.conn_destroy = cb_conn_destroy;
@@ -636,6 +679,7 @@ jint native_start(JNIEnv *env, jclass, jobject listener, jstring jname, jbyteArr
     raop_set_plist(g_raop, "refreshRate", fps);
     raop_set_plist(g_raop, "maxFPS", fps);
     raop_set_plist(g_raop, "hls", 1);
+    if (pin) raop_set_plist(g_raop, "pin", 0);  // a new random PIN for each pairing
     {
         // Preferred audio/subtitle language for HLS, e.g. "sv-SE".
         const char *lang = env->GetStringUTFChars(jlang, nullptr);
@@ -714,7 +758,7 @@ jbyteArray native_service_txt(JNIEnv *env, jclass, jint service) {
 
 const JNINativeMethod kMethods[] = {
     {"nativeStart",
-     "(Ldev/matinzd/airplaytv/airplay/AirPlayNative$Listener;Ljava/lang/String;[BLjava/lang/String;IIILjava/lang/String;Z)I",
+     "(Ldev/matinzd/airplaytv/airplay/AirPlayNative$Listener;Ljava/lang/String;[BLjava/lang/String;IIILjava/lang/String;ZZZ)I",
      reinterpret_cast<void *>(native_start)},
     {"nativeStop", "()V", reinterpret_cast<void *>(native_stop)},
     {"nativeDisconnect", "()V", reinterpret_cast<void *>(native_disconnect)},

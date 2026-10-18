@@ -1,6 +1,7 @@
 package dev.matinzd.airplaytv
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.ConnectivityManager
@@ -8,6 +9,7 @@ import android.net.LinkProperties
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import java.net.Inet4Address
@@ -41,6 +43,12 @@ class MainActivity : Activity() {
             setPadding(padding, padding, padding, padding)
             addView(status)
             addView(details, LinearLayout.LayoutParams(-1, -2).apply { topMargin = (24 * density).toInt() })
+            addView(Button(this@MainActivity).apply {
+                text = "Settings"
+                isAllCaps = false
+                textSize = 20f
+                setOnClickListener { startActivity(Intent(this@MainActivity, SettingsActivity::class.java)) }
+            }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = (32 * density).toInt() })
         })
     }
 

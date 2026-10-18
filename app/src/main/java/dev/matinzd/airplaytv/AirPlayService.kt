@@ -38,6 +38,7 @@ import java.util.concurrent.Executors
 class AirPlayService : Service(), AirPlayNative.Listener {
 
     private val worker = Executors.newSingleThreadExecutor()
+    private lateinit var settings: ReceiverSettings
     private lateinit var advertiser: MdnsAdvertiser
     private lateinit var cpuLock: PowerManager.WakeLock
     private var wifiLock: WifiManager.WifiLock? = null
@@ -73,6 +74,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
             ?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "airplaytv:server")
             ?.apply { setReferenceCounted(false); acquire() }
 
+        settings = ReceiverSettings(this)
         hls = HlsPlayer(
             this,
             onVideoSize = { width, height -> AirPlaySession.update { it.copy(videoWidth = width, videoHeight = height) } },
@@ -89,7 +91,23 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         worker.execute(::startServer)
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_RESTART) worker.execute(::restartServer)
+        return START_STICKY
+    }
+
+    /** Settings changed: stop everything and start again with the new settings. */
+    private fun restartServer() {
+        Log.i(TAG, "restarting the receiver with new settings")
+        advertiser.unregister()
+        AirPlayNative.nativeStop()
+        audio.stop()
+        video.reset()
+        hls.stop()
+        sync.reset()
+        AirPlaySession.update { it.endSession().copy(connections = 0, serverRunning = false) }
+        startServer()
+    }
 
     override fun onDestroy() {
         unregisterReceiver(screenOffReceiver)
@@ -109,11 +127,17 @@ class AirPlayService : Service(), AirPlayNative.Listener {
     }
 
     private fun startServer() {
-        val name = deviceName()
+        val name = settings.name ?: deviceName()
+        sync.decoupled = settings.lowLatency
         val debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         val keyFile = File(filesDir, "airplay-key.pem").absolutePath
         val language = Locale.getDefault().toLanguageTag()
-        val rc = AirPlayNative.nativeStart(this, name, hardwareAddress(), keyFile, 3840, 2160, 60, language, debug)
+        val allow4k = settings.allow4k
+        val rc = AirPlayNative.nativeStart(
+            this, name, hardwareAddress(), keyFile,
+            if (allow4k) 3840 else 1920, if (allow4k) 2160 else 1080, 60,
+            language, settings.requirePin, allow4k, debug,
+        )
         if (rc != 0) {
             Log.e(TAG, "AirPlay server failed to start: $rc")
             AirPlaySession.update { it.copy(serverRunning = false, error = "Server failed to start ($rc)") }
@@ -170,7 +194,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
 
     override fun onClientRequest(deviceId: String?, model: String?, name: String?) {
         Log.i(TAG, "AirPlay session from $name ($model)")
-        AirPlaySession.update { it.copy(clientName = name ?: "iPhone", clientModel = model) }
+        AirPlaySession.update { it.copy(clientName = name ?: "iPhone", clientModel = model, pin = null) }
         sync.reset()
         TvWaker.wake(this)
     }
@@ -285,10 +309,29 @@ class AirPlayService : Service(), AirPlayNative.Listener {
 
     override fun onVideoPlaybackInfo(): DoubleArray = hls.playbackInfo()
 
+    override fun onDisplayPin(pin: String?) {
+        Log.i(TAG, "showing a pairing PIN")
+        AirPlaySession.update { it.copy(pin = pin) }
+        TvWaker.wake(this)
+    }
+
+    override fun onRegisterClient(deviceId: String?, publicKey: String?, name: String?) {
+        if (publicKey != null && settings.requirePin) settings.remember(publicKey, name ?: deviceId ?: "device")
+        AirPlaySession.update { it.copy(pin = null) }
+    }
+
+    override fun isClientRegistered(publicKey: String) = settings.isRemembered(publicKey)
+
     companion object {
         private const val TAG = "AirPlayService"
         private const val CHANNEL = "airplay_receiver"
         private const val NOTIFICATION_ID = 1
+
+        const val ACTION_RESTART = "dev.matinzd.airplaytv.RESTART"
+
+        fun restart(context: Context) {
+            context.startService(Intent(context, AirPlayService::class.java).setAction(ACTION_RESTART))
+        }
 
         fun start(context: Context) {
             try {

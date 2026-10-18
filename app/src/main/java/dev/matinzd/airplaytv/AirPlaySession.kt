@@ -25,13 +25,15 @@ object AirPlaySession {
         val artist: String? = null,
         val album: String? = null,
         val coverArt: Bitmap? = null,
+        /** PIN a pairing device must enter, while one is being shown. */
+        val pin: String? = null,
     ) {
         val showsVideo get() = mirroring || hlsVideo
-        val active get() = connections > 0 && (mirroring || hlsVideo || audioOnly || clientName != null)
+        val active get() = connections > 0 && (mirroring || hlsVideo || audioOnly || clientName != null || pin != null)
 
         fun endSession() = copy(
             clientName = null, clientModel = null, mirroring = false, hlsVideo = false, audioOnly = false,
-            videoWidth = 0, videoHeight = 0, title = null, artist = null, album = null, coverArt = null,
+            videoWidth = 0, videoHeight = 0, title = null, artist = null, album = null, coverArt = null, pin = null,
         )
     }
 

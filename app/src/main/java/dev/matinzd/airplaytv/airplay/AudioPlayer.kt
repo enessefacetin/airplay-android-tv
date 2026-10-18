@@ -120,7 +120,7 @@ class AudioPlayer(private val sync: AvSync) {
                 val needNs = (arrivalNs - ptsNs) + deviceNs + startBufferNs
                 stats.need(arrivalNs - ptsNs, deviceNs, startBufferNs, needNs)
                 sync.reportAudio(needNs)
-                val error = heardAtNs - (ptsNs + sync.latencyNs) // > 0: late, < 0: early
+                val error = heardAtNs - (ptsNs + sync.audioLatencyNs) // > 0: late, < 0: early
                 stats.error(error)
                 when {
                     error > RESYNC_LATE_NS && queuedFrames(t) > SAMPLE_RATE / 20 -> {

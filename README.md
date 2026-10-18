@@ -25,6 +25,17 @@ turns on the TV and switches to its input. Turning the TV off ends the session.
   SETUP (or `/play` for AirPlay video) it turns the screen on and opens `PlaybackActivity`. Turning
   the TV off drops the session. It starts on boot, and `KeepAliveJob` restarts it if the system stops it.
 
+## Settings
+
+Open the app on the TV and choose **Settings**:
+
+- **AirPlay name**: defaults to the TV's device name.
+- **Require a PIN for new devices**: a new iPhone/Mac must enter a code shown on the TV once; it is
+  then remembered. "Forget remembered devices" clears the list.
+- **4K mirroring (H.265)**: on by default; turn off on slow Wi-Fi.
+- **Low-latency mirroring**: video doesn't wait for audio, so the picture follows the phone faster
+  but sound may lag (useful for games and scrolling).
+
 ## Build and run
 
 Requires Android Studio's SDK with NDK 29 and CMake 3.22.1. The first build also compiles OpenSSL.

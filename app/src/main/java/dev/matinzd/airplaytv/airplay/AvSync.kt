@@ -23,6 +23,19 @@ class AvSync {
     @Volatile
     var audioOnly = false
 
+    /**
+     * Low-latency mirroring: video ignores what audio needs (no lip-sync); audio keeps
+     * its own latency so it still plays smoothly, just behind the picture.
+     */
+    @Volatile
+    var decoupled = false
+
+    @Volatile
+    private var ownAudioLatencyNs = 0L
+
+    /** The latency audio is played at: the shared one, or its own in low-latency mode. */
+    val audioLatencyNs get() = if (decoupled && !audioOnly) ownAudioLatencyNs else latencyNs
+
     // A single late video frame (a Wi-Fi hiccup) just shows late; only repeated
     // lateness should hold every later frame back, so video ignores its top sample.
     private val video = Window(ignoreTopSample = true)
@@ -39,6 +52,7 @@ class AvSync {
     @Synchronized
     fun reset() {
         latencyNs = 0
+        ownAudioLatencyNs = 0
         audioOnly = false
         video.reset()
         audio.reset()
@@ -51,7 +65,16 @@ class AvSync {
         val now = System.nanoTime()
         window.add(requiredNs, now)
 
-        val needed = maxOf(video.max(now), audio.max(now))
+        if (decoupled && !audioOnly) {
+            // Audio follows only itself (raised at once, lowered slowly); video below
+            // then follows only itself too.
+            val audioNeed = audio.max(now)
+            if (audioNeed != Window.NONE) {
+                val target = (audioNeed + MARGIN_NS).coerceIn(-MAX_LATENCY_NS, MAX_LATENCY_NS)
+                if (target > ownAudioLatencyNs || ownAudioLatencyNs - target > HYSTERESIS_NS) ownAudioLatencyNs = target
+            }
+        }
+        val needed = if (decoupled && !audioOnly) video.max(now) else maxOf(video.max(now), audio.max(now))
         if (needed == Window.NONE) return
         // Mirroring wants the lowest latency that works. Music arrives in bursts: keep a
         // wider margin, start near where it settles (~0.7 s here) and never lower it, so

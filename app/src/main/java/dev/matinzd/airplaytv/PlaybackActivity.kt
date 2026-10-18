@@ -104,10 +104,16 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
             videoFrame.aspectRatio = state.videoWidth.toFloat() / state.videoHeight
         }
         // After the session ends, stay black while closing instead of "Connecting…".
-        infoPanel.visibility = if (showVideo || sessionOver) View.GONE else View.VISIBLE
+        infoPanel.visibility = if ((showVideo && state.pin == null) || sessionOver) View.GONE else View.VISIBLE
+        title.textSize = if (state.pin != null) 72f else 32f
 
         val client = state.clientName ?: "your device"
         when {
+            state.pin != null -> {
+                cover.setImageResource(R.drawable.ic_airplay)
+                title.text = state.pin.toCharArray().joinToString("  ")
+                subtitle.text = "Enter this code on your device to AirPlay to ${state.serverName}"
+            }
             state.audioOnly -> {
                 if (state.coverArt != null) cover.setImageBitmap(state.coverArt) else cover.setImageResource(R.drawable.ic_airplay)
                 title.text = state.title ?: "AirPlay"
