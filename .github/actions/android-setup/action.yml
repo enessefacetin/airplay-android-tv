@@ -13,7 +13,8 @@ runs:
 
     - name: Install NDK and CMake
       shell: bash
-      run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.13599879" "cmake;3.22.1" > /dev/null
+      # `yes` answers the licence prompts; it fails with SIGPIPE when sdkmanager exits.
+      run: (yes || true) | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.13599879" "cmake;3.22.1" > /dev/null
 
     # OpenSSL takes minutes to build; it only changes with the script or the NDK.
     - uses: actions/cache@v6
