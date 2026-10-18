@@ -24,8 +24,5 @@ tv am start -n "$PKG/.MainActivity"
 
 echo "== Device state (for wake-from-standby)"
 echo -n "hdmi_control_enabled (CEC, null = default on): "; tv settings get global hdmi_control_enabled
-echo -n "CEC volume control (needed for 'Device volume controls the TV'; turn on with
-  adb shell cmd hdmi_control cec_setting set volume_control_enabled 1): "
-tv cmd hdmi_control cec_setting get volume_control_enabled
 echo -n "Low power standby: "; tv dumpsys power | grep -m1 -i "mLowPowerStandbyActive" | tr -d ' '
 tv appops get "$PKG" SYSTEM_ALERT_WINDOW

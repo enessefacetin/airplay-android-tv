@@ -16,14 +16,11 @@ Status as of 2026-10-18 (end of the first development session).
 - 10-foot UI for all screens; OLED burn-in protection on the music screen
 - Keep-alive (boot receiver, START_STICKY, 15-minute job), mDNS retries
 - Manual GitHub release workflow with a signed APK
-- Sender volume steps the TV or AV receiver over HDMI-CEC (setting)
 - Unit tests (JVM, `./gradlew :app:testDebugUnitTest`): `AvSync`, `VideoNal`, `Dmap`,
   `MdnsAdvertiser.parseTxt`, `AirPlaySession.State` (PIN, active, position)
 
 ## Open checks
 
-- [ ] TV volume: check that slider moves change the receiver volume, and that the
-  step size feels right (ADR 0017).
 - [ ] Overnight standby test: leave the TV in standby overnight, then AirPlay to it
   in the morning. If it doesn't wake, check `adb logcat` for the service and
   `KeepAliveJob`, and Google TV's energy mode / Low Power Standby.
@@ -45,4 +42,6 @@ Status as of 2026-10-18 (end of the first development session).
 - No FairPlay DRM video (Apple TV+, Netflix casting).
 - No AirPlay 2 multi-room audio (sync with HomePods).
 - Only `armeabi-v7a` is built; other devices need more ABIs.
+- The sender's volume and the TV/receiver volume are independent (ADR 0017, rejected:
+  the test receiver only supports CEC volume steps).
 - Reinstalling the app ends a running AirPlay session (the receiver restarts).

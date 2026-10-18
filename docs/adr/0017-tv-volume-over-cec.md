@@ -1,41 +1,51 @@
 # ADR 0017: Sender volume steps the TV or AV receiver over HDMI-CEC
 
-Status: accepted (2026-10-18)
+Status: rejected (2026-10-18). Built, tested on the device, then removed.
 
 ## Context
 
-The sender's volume slider changed only the app's own audio level. At a low slider
-position the TV or receiver stayed loud and the audio lost resolution, and the TV
-remote's volume and the slider worked separately.
+The sender's volume slider changes only the app's own audio level (digital gain).
+The idea was to let the slider control the TV or AV receiver instead, and to keep
+the slider in sync when the TV remote changes the volume.
 
-Findings on the Streamer (Android 14):
+Findings on the Streamer (Android 14) with an LG TV and an AV receiver on ARC:
 
 - HDMI is a "full volume" output: the Android music volume stays at its maximum, and
-  setting it (`setStreamVolume`) does not change the HDMI output.
+  setting it does not change the HDMI output.
 - With "HDMI-CEC volume control" on (`cmd hdmi_control cec_setting set
-  volume_control_enabled 1`), `AudioManager.adjustStreamVolume(STREAM_MUSIC,
-  ADJUST_RAISE/LOWER, 0)` from the app sends `<User Control Pressed> Volume up/down`
-  to the audio system (the AV receiver on ARC, CEC address 5) or the TV. This needs
-  no permission.
-- Absolute volume (`<Set Audio Volume Level>`, AVB) is not available: the test
-  receiver does not answer `<Give Audio Status>`. So only steps are possible, and the
-  receiver's level is unknown.
-- Injecting key events needs `INJECT_EVENTS`, even into the app's own window.
+  volume_control_enabled 1`; it was off on the test device), the app's
+  `AudioManager.adjustStreamVolume(STREAM_MUSIC, ADJUST_RAISE/LOWER, 0)` is sent as
+  `<User Control Pressed> Volume up/down` to the receiver (CEC address 5). No
+  permission is needed.
+- The receiver has no absolute volume: it doesn't answer `<Give Audio Status>`, so
+  only steps are possible and its level is unknown.
+- The remote's volume keys are handled by the system before any app. A media session
+  with a `VolumeProvider` and the foreground activity don't get them. Injecting keys
+  needs `INJECT_EVENTS`. Only an accessibility service could catch them.
+- The sender accepts DACP `volumeup`/`volumedown` (tested on iOS: 200 OK, then the
+  phone sends its new volume back), so remote-to-phone sync is possible in principle.
+
+The prototype turned slider moves into steps (16 over -30..0 dB, from the volume at
+session start). In use:
+
+- It was slow: each step is a separate CEC message that the receiver handles in turn.
+- Moving the slider to the top sent 13 steps in about a second. The receiver took it
+  as a held key and went to full volume.
+- The slider and the receiver drift apart, because there is no level to sync to.
 
 ## Decision
 
-- A setting, "Device volume controls the TV" (off by default).
-- When on, the app plays at full level and `TvVolume` turns slider moves into steps:
-  16 steps over -30..0 dB (one iPhone volume button press = one step).
-- The first volume in a session is only the starting point, so connecting doesn't
-  change the receiver's level. The level resets when the last connection closes.
-- Mute (-144) silences the app's audio and sends no CEC mute, because the mute key
-  toggles and could get out of step.
+Rejected. Keep two independent volumes, as an Apple TV does by default: the sender's
+slider sets the app's digital gain, and the TV remote sets the TV or receiver volume.
+The slider can never make the speakers louder than the level set on the receiver.
+
+The digital gain costs little quality: turning 16-bit audio down by 20 dB still leaves
+about 13 bits, which isn't audible at that volume.
 
 ## Consequences
 
-- The slider and the receiver's level do not match exactly; they move together.
-- If CEC volume control is off, the slider does nothing while the setting is on
-  (the setting's description says it needs CEC volume control).
-- One step on the receiver may be a different amount than on the iPhone. If the range
-  feels too small or too large, the steps per slider range is the value to change.
+- No CEC volume code and no accessibility service in the app.
+- Revisit only for a receiver with absolute volume (CEC `<Set Audio Volume Level>` and
+  `<Report Audio Status>`, Android's "absolute volume behavior"). Then the slider can
+  map to an exact level with a maximum, and the remote's changes can go back to the
+  sender with DACP `setproperty?dmcp.device-volume=<dB>`.

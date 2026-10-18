@@ -20,4 +20,4 @@ replaced ones as superseded instead of editing them.
 - [0014: Settings stored in SharedPreferences; changes restart the receiver](0014-settings.md)
 - [0015: Build tooling, signing and release](0015-build-and-release.md)
 - [0016: Out of scope: DRM video and AirPlay 2 multi-room audio](0016-not-supported.md)
-- [0017: Sender volume steps the TV or AV receiver over HDMI-CEC](0017-tv-volume-over-cec.md)
+- [0017: Sender volume steps the TV or AV receiver over HDMI-CEC](0017-tv-volume-over-cec.md) (rejected)

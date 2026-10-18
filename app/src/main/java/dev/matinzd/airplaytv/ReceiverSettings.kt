@@ -26,11 +26,6 @@ class ReceiverSettings(context: Context) {
         get() = prefs.getBoolean(KEY_LOW_LATENCY, false)
         set(value) = prefs.edit().putBoolean(KEY_LOW_LATENCY, value).apply()
 
-    /** The sender's volume steps the TV or AV receiver over HDMI-CEC; the app plays at full level. */
-    var tvVolume: Boolean
-        get() = prefs.getBoolean(KEY_TV_VOLUME, false)
-        set(value) = prefs.edit().putBoolean(KEY_TV_VOLUME, value).apply()
-
     /** Remembered devices: public key (base64) -> name. */
     val rememberedDevices: Map<String, String>
         get() = prefs.getStringSet(KEY_DEVICES, emptySet())!!.mapNotNull { entry ->
@@ -53,7 +48,6 @@ class ReceiverSettings(context: Context) {
         const val KEY_PIN = "require_pin"
         const val KEY_4K = "allow_4k"
         const val KEY_LOW_LATENCY = "low_latency"
-        const val KEY_TV_VOLUME = "tv_volume"
         const val KEY_DEVICES = "remembered_devices"
     }
 }

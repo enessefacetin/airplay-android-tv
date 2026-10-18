@@ -49,10 +49,7 @@ battery-optimisation exemption, notifications).
 | Other | PCM (ct=1), AAC-LC (ct=4) | Supported, rarely used |
 
 Volume: AirPlay dB in -30..0 (-144 = mute) → linear gain `10^(dB/20)`; -30 and below = 0.
-
-With "Device volume controls the TV" on (ADR 0017): the app plays at full level and slider
-moves become HDMI-CEC volume steps (16 over -30..0 dB) to the TV or AV receiver; the first
-value in a session is the starting point; mute silences the app only.
+The TV remote sets the TV/receiver volume separately (ADR 0017).
 
 ## 5. A/V sync
 
@@ -124,7 +121,6 @@ focused "Return to AirPlay" button while a session is active.
 | Require a code for new devices | Off | PIN pairing (legacy pairing, feature bit 27, `pw=true`) |
 | 4K mirroring | On | Feature bit 42, 3840x2160 display |
 | Low-latency mirroring | Off | Video doesn't wait for audio |
-| Device volume controls the TV | Off | Slider steps the TV/receiver volume over HDMI-CEC (needs CEC volume control on) |
 | Remembered devices | — | Select to forget all |
 
 Any change restarts the receiver and re-announces it.
