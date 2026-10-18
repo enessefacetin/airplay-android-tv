@@ -1,0 +1,9 @@
+.gradle/
+build/
+app/.cxx/
+local.properties
+.idea/
+*.iml
+.DS_Store
+# built by scripts/build-openssl.sh
+third_party/openssl/
