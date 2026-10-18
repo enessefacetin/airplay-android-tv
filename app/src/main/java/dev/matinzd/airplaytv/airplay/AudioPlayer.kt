@@ -43,6 +43,11 @@ class AudioPlayer(private val sync: AvSync) {
     // Where the AudioTrack is: frames written so far, and its output pipeline latency.
     private var framesWritten = 0L
     private var pipelineNs = -1L
+    // Lowest amount of audio the track holds between writes (its natural buffering),
+    // over the last 2-4 s. Part of the latency audio needs.
+    private var queueFloorNs = 0L
+    private var queueFloorCandidateNs = Long.MAX_VALUE
+    private var queueFloorWindowStartNs = 0L
     private val timestamp = AudioTimestamp()
     private val stats = Stats()
 
@@ -67,6 +72,8 @@ class AudioPlayer(private val sync: AvSync) {
         aacPtsUs = 0
         framesWritten = 0
         pipelineNs = -1
+        queueFloorNs = 0
+        queueFloorCandidateNs = Long.MAX_VALUE
     }
 
     fun setVolume(gain: Float) = post {
@@ -102,7 +109,8 @@ class AudioPlayer(private val sync: AvSync) {
             val now = System.nanoTime()
             val heardAtNs = nextFrameHeardAtNs(t, now)
             if (heardAtNs != null) {
-                if (pipelineNs >= 0) sync.reportAudio(now - ptsNs + pipelineNs)
+                // Needed: arrival lateness + the track's natural buffering + device output latency.
+                if (pipelineNs >= 0) sync.reportAudio(now - ptsNs + queueFloorNs + pipelineNs)
                 val error = heardAtNs - (ptsNs + sync.latencyNs) // > 0: late, < 0: early
                 stats.error(error)
                 when {
@@ -160,6 +168,7 @@ class AudioPlayer(private val sync: AvSync) {
         val heardAt = timestamp.nanoTime + framesAhead * 1_000_000_000L / SAMPLE_RATE
         val queuedNs = (framesWritten - t.playbackHeadPosition.toLong()) * 1_000_000_000L / SAMPLE_RATE
         val deviceNs = (heardAt - now - queuedNs).coerceAtLeast(0)
+        trackQueueFloor(queuedNs.coerceAtLeast(0), now)
         if (pipelineNs < 0) {
             pipelineNs = deviceNs
             Log.i(TAG, "audio device latency ${deviceNs / AvSync.MS} ms")
@@ -167,6 +176,15 @@ class AudioPlayer(private val sync: AvSync) {
             pipelineNs += (deviceNs - pipelineNs) / 16
         }
         return heardAt
+    }
+
+    private fun trackQueueFloor(queuedNs: Long, now: Long) {
+        if (queuedNs < queueFloorCandidateNs) queueFloorCandidateNs = queuedNs
+        if (now - queueFloorWindowStartNs > 2_000_000_000L) {
+            queueFloorNs = queueFloorCandidateNs
+            queueFloorCandidateNs = Long.MAX_VALUE
+            queueFloorWindowStartNs = now
+        }
     }
 
     private fun writeSilence(t: AudioTrack, frames: Int): Boolean {
@@ -308,9 +326,9 @@ class AudioPlayer(private val sync: AvSync) {
             val t = track
             val queuedMs = if (t != null) (framesWritten - t.playbackHeadPosition.toLong()) * 1000 / SAMPLE_RATE else 0
             Log.i(TAG, ("sync error avg %d ms, dropped %d, silence %d ms, no-timestamp %d, " +
-                "queued %d ms, device latency %d ms, state %d, backlog %d").format(
+                "queued %d ms (floor %d), device latency %d ms, state %d, backlog %d").format(
                 if (count > 0) errorSumNs / count / AvSync.MS else 0, dropped,
-                silenceFrames * 1000 / SAMPLE_RATE, noTimestamp, queuedMs, pipelineNs / AvSync.MS,
+                silenceFrames * 1000 / SAMPLE_RATE, noTimestamp, queuedMs, queueFloorNs / AvSync.MS, pipelineNs / AvSync.MS,
                 t?.playState ?: -1, queued.get()))
             windowStart = System.nanoTime()
             count = 0; errorSumNs = 0; dropped = 0; silenceFrames = 0; noTimestamp = 0
