@@ -6,7 +6,9 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
+import android.content.BroadcastReceiver
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.ServiceInfo
 import android.graphics.BitmapFactory
@@ -42,6 +44,16 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         AirPlaySession.update { it.copy(videoWidth = width, videoHeight = height) }
     }
 
+    /** Turning the TV off ends the AirPlay session, like it does on an Apple TV. */
+    private val screenOffReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (AirPlaySession.state.connections > 0) {
+                Log.i(TAG, "screen turned off, ending the AirPlay session")
+                worker.execute { AirPlayNative.nativeDisconnect() }
+            }
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -58,12 +70,14 @@ class AirPlayService : Service(), AirPlayNative.Listener {
 
         AirPlaySession.videoDecoder = video
         advertiser = MdnsAdvertiser(this)
+        registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
         worker.execute(::startServer)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) = START_STICKY
 
     override fun onDestroy() {
+        unregisterReceiver(screenOffReceiver)
         worker.execute {
             advertiser.unregister()
             AirPlayNative.nativeStop()

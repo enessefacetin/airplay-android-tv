@@ -28,7 +28,7 @@ object AirPlayNative {
         /** RTSP SETUP from a client: a session is starting. */
         fun onClientRequest(deviceId: String?, model: String?, name: String?)
         fun onConnectionCount(count: Int)
-        /** The client vanished; the server has already restarted itself. */
+        /** Clients were dropped (0 = nativeDisconnect, 1 = client stopped responding); the server keeps listening. */
         fun onConnectionLost(reason: Int)
 
         /** One H.264 access unit in Annex-B format. */
@@ -61,6 +61,8 @@ object AirPlayNative {
     ): Int
 
     @JvmStatic external fun nativeStop()
+    /** Drops all client connections; the server keeps listening. */
+    @JvmStatic external fun nativeDisconnect()
     @JvmStatic external fun nativeServiceName(service: Int): String?
     @JvmStatic external fun nativeServicePort(service: Int): Int
     @JvmStatic external fun nativeServiceTxt(service: Int): ByteArray?

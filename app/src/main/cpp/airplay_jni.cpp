@@ -149,6 +149,7 @@ void call_with_bytes(jmethodID method, const void *data, int len) {
 
 /* ---- server restart (lost client) ---------------------------------------- */
 
+/* reason: 0 = requested by the app, 1 = client stopped responding, 2 = unsupported stream */
 void restart_httpd(int reason) {
     if (g_restart_pending.exchange(true)) return;
     // Never stop httpd from one of its own threads: do it on a fresh thread.
@@ -515,6 +516,11 @@ void native_stop(JNIEnv *env, jclass) {
     }
 }
 
+/* Drop every client connection (e.g. the TV was turned off); the server keeps listening. */
+void native_disconnect(JNIEnv *, jclass) {
+    if (g_open_connections > 0) restart_httpd(0);
+}
+
 jstring native_service_name(JNIEnv *env, jclass, jint service) {
     std::lock_guard<std::mutex> lock(g_server_mutex);
     if (!g_dnssd) return nullptr;
@@ -541,6 +547,7 @@ const JNINativeMethod kMethods[] = {
      "(Ldev/matinzd/airplaytv/airplay/AirPlayNative$Listener;Ljava/lang/String;[BLjava/lang/String;IIIZ)I",
      reinterpret_cast<void *>(native_start)},
     {"nativeStop", "()V", reinterpret_cast<void *>(native_stop)},
+    {"nativeDisconnect", "()V", reinterpret_cast<void *>(native_disconnect)},
     {"nativeServiceName", "(I)Ljava/lang/String;", reinterpret_cast<void *>(native_service_name)},
     {"nativeServicePort", "(I)I", reinterpret_cast<void *>(native_service_port)},
     {"nativeServiceTxt", "(I)[B", reinterpret_cast<void *>(native_service_txt)},
