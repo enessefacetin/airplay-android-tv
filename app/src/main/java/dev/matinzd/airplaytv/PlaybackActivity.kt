@@ -432,18 +432,21 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
     // Two small bitmaps used in turn, so the one on screen is never being written to.
     private val backdropFrames = arrayOfNulls<Bitmap>(2)
     private var backdropFrame = 0
+    private var backdropCopying = false
 
-    /** Copies the current video frame (small) into the blurred backdrop, a few times a second. */
+    /** Copies the current video frame (small) into the blurred backdrop, up to 30 times a second. */
     private val backdropCopier = object : Runnable {
         override fun run() {
             handler.postDelayed(this, BACKDROP_COPY_MS)
             val state = AirPlaySession.state
-            if (Build.VERSION.SDK_INT < 31 || state.videoWidth <= 0 || !surfaceView.holder.surface.isValid) return
+            if (backdropCopying || Build.VERSION.SDK_INT < 31 || state.videoWidth <= 0 || !surfaceView.holder.surface.isValid) return
             val height = (BACKDROP_WIDTH * state.videoHeight / state.videoWidth).coerceAtLeast(1)
             val index = backdropFrame
             val bitmap = backdropFrames[index]?.takeIf { it.height == height }
                 ?: Bitmap.createBitmap(BACKDROP_WIDTH, height, Bitmap.Config.ARGB_8888).also { backdropFrames[index] = it }
+            backdropCopying = true
             PixelCopy.request(surfaceView, bitmap, { result ->
+                backdropCopying = false
                 if (result == PixelCopy.SUCCESS && videoBackdrop.visibility == View.VISIBLE) {
                     videoBackdrop.setImageBitmap(bitmap)
                     backdropFrame = 1 - index
@@ -532,7 +535,7 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         const val DIM_ALPHA = 0.35f
         const val CONTROLS_VISIBLE_MS = 4_000L
         const val SIDE_BARS_BELOW_ASPECT = 1.5f // 16:9 = 1.78; 4:3 = 1.33
-        const val BACKDROP_COPY_MS = 250L
+        const val BACKDROP_COPY_MS = 33L
         const val BACKDROP_WIDTH = 48
     }
 }
