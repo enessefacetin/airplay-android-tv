@@ -112,22 +112,23 @@ int64_t monotonic_now_ns() {
 
 /* Presentation clock, as UxPlay does it: audio and video timestamps share the
    sender's clock (ntp_time_remote). One offset maps that clock onto
-   System.nanoTime() (CLOCK_MONOTONIC), anchored on the first packet of a session:
-   at its NTP-synced local time when that is plausible (AirPlay music: the time
-   the sender intends), otherwise at its arrival time. */
+   System.nanoTime() (CLOCK_MONOTONIC), anchored on the first packet of a session.
+   AirPlay music anchors at the NTP-synced time the sender intends (about 2 s after
+   arrival), so playback matches the iPhone. Mirroring anchors at arrival: the
+   iPhone's own ~300 ms target would only add latency; AvSync adds what's needed. */
 constexpr int64_t kNoOffset = INT64_MIN;
 std::atomic<int64_t> g_remote_offset{kNoOffset};
 std::atomic<int64_t> g_last_diag_ns{0};
 
 void reset_presentation_clock() { g_remote_offset = kNoOffset; }
 
-int64_t presentation_ns(uint64_t remote_ns, uint64_t local_realtime_ns, const char *what) {
+int64_t presentation_ns(uint64_t remote_ns, uint64_t local_realtime_ns, bool sender_time, const char *what) {
     if (!remote_ns) return 0;
     int64_t now_mono = monotonic_now_ns();
     int64_t offset = g_remote_offset;
     if (offset == kNoOffset) {
         int64_t anchor = now_mono;
-        if (local_realtime_ns) {
+        if (sender_time && local_realtime_ns) {
             int64_t local_mono = (int64_t) local_realtime_ns - realtime_now_ns() + now_mono;
             if (llabs(local_mono - now_mono) < 10000000000LL) anchor = local_mono;
         }
@@ -308,7 +309,7 @@ void cb_video_process(void *, raop_ntp_t *, video_decode_struct *data) {
     JNIEnv *env = get_env();
     if (!env) return;
     jbyteArray arr = to_jbytes(env, data->data, data->data_len);
-    jlong pts = presentation_ns(data->ntp_time_remote, data->ntp_time_local, "video");
+    jlong pts = presentation_ns(data->ntp_time_remote, data->ntp_time_local, false, "video");
     env->CallVoidMethod(g_listener, m.onVideoData, arr, pts);
     check_exception(env);
     if (arr) env->DeleteLocalRef(arr);
@@ -361,7 +362,7 @@ void cb_audio_get_format(void *, unsigned char *ct, unsigned short *spf, bool *u
 
 void cb_audio_process(void *, raop_ntp_t *, audio_decode_struct *data) {
     if (data->data_len <= 0) return;
-    int64_t pts_ns = presentation_ns(data->ntp_time_remote, data->ntp_time_local, "audio");
+    int64_t pts_ns = presentation_ns(data->ntp_time_remote, data->ntp_time_local, data->ct == 2, "audio");
     switch (data->ct) {
     case 1:  // LPCM S16LE
         call_with_bytes_ts(m.onAudioPcm, data->data, data->data_len, pts_ns);

@@ -51,7 +51,8 @@ class AvSync {
         if (target > current) {
             latencyNs = target
         } else if (current - target > HYSTERESIS_NS && now - lastDecreaseNs > 1_000_000_000L) {
-            latencyNs = current - minOf(current - target, STEP_DOWN_NS)
+            // Shed a quarter of the excess per second (at least 10 ms).
+            latencyNs = current - maxOf((current - target) / 4, minOf(current - target, STEP_DOWN_NS))
             lastDecreaseNs = now
         }
         if (now - lastLogNs > 5_000_000_000L) {

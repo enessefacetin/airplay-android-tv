@@ -43,7 +43,7 @@ class AudioPlayer(private val sync: AvSync) {
     private var framesWritten = 0L
     private var pipelineNs = -1L
     private val timestamp = AudioTimestamp()
-    private val stats = Stats()
+    private val stats = Stats { pipelineNs }
 
     fun configure(ct: Int, samplesPerFrame: Int, lowLatency: Boolean) = post {
         releaseLocked()
@@ -123,16 +123,20 @@ class AudioPlayer(private val sync: AvSync) {
 
     /**
      * When the next frame written now would be heard, from the track's latest
-     * timestamp. Also measures the output pipeline latency once per track, while
-     * the queue still holds only what arrived naturally.
+     * timestamp. Also tracks the device's own output latency: that time minus
+     * what's still queued in the track, smoothed.
      */
     private fun nextFrameHeardAtNs(t: AudioTrack, now: Long): Long? {
         if (!t.getTimestamp(timestamp) || timestamp.framePosition <= 0) return null
         val framesAhead = framesWritten - timestamp.framePosition
         val heardAt = timestamp.nanoTime + framesAhead * 1_000_000_000L / SAMPLE_RATE
+        val queuedNs = (framesWritten - t.playbackHeadPosition.toLong()) * 1_000_000_000L / SAMPLE_RATE
+        val deviceNs = (heardAt - now - queuedNs).coerceAtLeast(0)
         if (pipelineNs < 0) {
-            pipelineNs = (heardAt - now).coerceAtLeast(0)
-            Log.i(TAG, "audio output pipeline latency ${pipelineNs / AvSync.MS} ms")
+            pipelineNs = deviceNs
+            Log.i(TAG, "audio device latency ${deviceNs / AvSync.MS} ms")
+        } else {
+            pipelineNs += (deviceNs - pipelineNs) / 16
         }
         return heardAt
     }
@@ -255,7 +259,7 @@ class AudioPlayer(private val sync: AvSync) {
     }
 
     /** Logs how far audio was from its slot, and the corrections made. */
-    private class Stats {
+    private class Stats(val deviceLatencyNs: () -> Long) {
         var dropped = 0
         var silenceFrames = 0L
         private var count = 0
@@ -267,8 +271,8 @@ class AudioPlayer(private val sync: AvSync) {
             errorSumNs += errorNs
             val elapsed = System.nanoTime() - windowStart
             if (elapsed >= 5_000_000_000L) {
-                Log.i(TAG, "sync error avg %d ms, dropped %d packets, inserted %d ms silence".format(
-                    errorSumNs / count / AvSync.MS, dropped, silenceFrames * 1000 / SAMPLE_RATE))
+                Log.i(TAG, "sync error avg %d ms, dropped %d packets, inserted %d ms silence, device latency %d ms".format(
+                    errorSumNs / count / AvSync.MS, dropped, silenceFrames * 1000 / SAMPLE_RATE, deviceLatencyNs() / AvSync.MS))
                 windowStart = System.nanoTime()
                 count = 0; errorSumNs = 0; dropped = 0; silenceFrames = 0
             }
