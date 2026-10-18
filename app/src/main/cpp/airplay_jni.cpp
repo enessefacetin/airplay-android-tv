@@ -76,6 +76,7 @@ struct {
     jmethodID onVolume, onCoverArt, onMetadata;
     jmethodID onVideoPlay, onVideoScrub, onVideoRate, onVideoStop, onVideoPlaylistRemove, onVideoPlaybackInfo;
     jmethodID onDisplayPin, onRegisterClient, isClientRegistered, onRemoteControl;
+    jmethodID onAudioStopped, onProgress;
 } m;
 
 /* raop keeps these pointers, so they must outlive the server. */
@@ -421,7 +422,8 @@ void cb_audio_set_coverart(void *, const void *buffer, int buflen) {
     call_with_bytes(m.onCoverArt, buffer, buflen);
 }
 
-void cb_audio_stop_coverart_rendering(void *) { call_with_bytes(m.onCoverArt, nullptr, 0); }
+/* The sender stopped its audio stream (TEARDOWN): for AirPlay music this is a pause. */
+void cb_audio_stop_coverart_rendering(void *) { call_listener(m.onAudioStopped); }
 
 void cb_audio_set_metadata(void *, const void *buffer, int buflen) {
     call_with_bytes(m.onMetadata, buffer, buflen);
@@ -486,7 +488,12 @@ void cb_export_dacp(void *, const char *active_remote, const char *dacp_id) {
 void cb_mirror_video_running(void *, bool) {}
 void cb_video_report_size(void *, float *, float *, float *, float *) {}
 void cb_audio_remote_control_id(void *, const char *, const char *) {}
-void cb_audio_set_progress(void *, uint32_t *, uint32_t *, uint32_t *) {}
+/* Track position, as RTP sample counts (44.1 kHz): start, now, end of the track. */
+void cb_audio_set_progress(void *, uint32_t *start, uint32_t *curr, uint32_t *end) {
+    double position = (uint32_t) (*curr - *start) / 44100.0;  // uint32 maths handles wrap-around
+    double duration = (uint32_t) (*end - *start) / 44100.0;
+    call_listener(m.onProgress, (jdouble) position, (jdouble) duration);
+}
 
 /* ---- AirPlay video (HLS, e.g. YouTube's AirPlay button) ----
    UxPlay fetches the playlists through the iPhone and serves them on
@@ -609,6 +616,8 @@ jint native_start(JNIEnv *env, jclass, jobject listener, jstring jname, jbyteArr
             "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
     m.isClientRegistered = env->GetMethodID(cls, "isClientRegistered", "(Ljava/lang/String;)Z");
     m.onRemoteControl = env->GetMethodID(cls, "onRemoteControl", "(Ljava/lang/String;Ljava/lang/String;)V");
+    m.onAudioStopped = env->GetMethodID(cls, "onAudioStopped", "()V");
+    m.onProgress = env->GetMethodID(cls, "onProgress", "(DD)V");
     env->DeleteLocalRef(cls);
     if (env->ExceptionCheck()) {  // a listener method is missing
         env->ExceptionDescribe();

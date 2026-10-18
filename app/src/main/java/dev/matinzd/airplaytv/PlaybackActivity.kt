@@ -4,6 +4,7 @@ import android.app.Activity
 import android.graphics.Color
 import android.graphics.RenderEffect
 import android.graphics.Shader
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -47,6 +48,17 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var trackArtist: TextView
     private lateinit var trackAlbum: TextView
     private lateinit var trackSource: TextView
+    private lateinit var statusIcon: ImageView
+    private lateinit var statusText: TextView
+    private lateinit var pausedOverlay: View
+    private lateinit var progressBar: View
+    private lateinit var progressFill: View
+    private lateinit var elapsedText: TextView
+    private lateinit var durationText: TextView
+    private lateinit var controls: View
+    private lateinit var playPauseButton: ImageView
+    private lateinit var previousButton: ImageView
+    private lateinit var nextButton: ImageView
     private lateinit var musicContent: View
     private var shownTitle: String? = null
 
@@ -136,6 +148,7 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun buildMusicPanel(): View {
+        val ctx = this
         backdrop = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             if (Build.VERSION.SDK_INT >= 31) setRenderEffect(RenderEffect.createBlurEffect(120f, 120f, Shader.TileMode.CLAMP))
@@ -143,45 +156,171 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         cover = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             clipToOutline = true
-            background = TvUi.rounded(this@PlaybackActivity, TvUi.SURFACE, radiusDp = 20)
+            background = TvUi.rounded(ctx, TvUi.SURFACE, radiusDp = 20)
         }
-        trackSource = TvUi.text(this, 18f, TvUi.ACCENT)
+        // Paused: the cover darkens and shows a pause sign.
+        pausedOverlay = FrameLayout(this).apply {
+            clipToOutline = true
+            background = TvUi.rounded(ctx, 0x99000000.toInt(), radiusDp = 20)
+            addView(ImageView(ctx).apply { setImageResource(R.drawable.ic_pause) },
+                FrameLayout.LayoutParams(dp(ctx, 112), dp(ctx, 112), Gravity.CENTER))
+        }
+        val coverFrame = FrameLayout(this).apply {
+            addView(cover, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            addView(pausedOverlay, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        }
+
+        statusIcon = ImageView(this)
+        statusText = TvUi.text(this, 20f, bold = true)
+        trackSource = TvUi.text(this, 20f, TvUi.TEXT_DIM).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+        val statusRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(statusIcon, LinearLayout.LayoutParams(dp(ctx, 24), dp(ctx, 24)))
+            addView(statusText, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(ctx, 8) })
+            addView(trackSource, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(ctx, 12) })
+        }
         trackTitle = TvUi.text(this, 44f, bold = true).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END }
         trackArtist = TvUi.text(this, 28f).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END }
         trackAlbum = TvUi.text(this, 22f, TvUi.TEXT_DIM).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+
+        progressFill = View(this).apply { background = TvUi.rounded(ctx, TvUi.TEXT, radiusDp = 3) }
+        progressBar = FrameLayout(this).apply {
+            background = TvUi.rounded(ctx, 0x40FFFFFF, radiusDp = 3)
+            addView(progressFill, FrameLayout.LayoutParams(0, MATCH_PARENT))
+        }
+        elapsedText = TvUi.text(this, 18f, TvUi.TEXT_DIM)
+        durationText = TvUi.text(this, 18f, TvUi.TEXT_DIM).apply { gravity = Gravity.END }
+        val times = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(elapsedText, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            addView(durationText, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        }
+
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(trackSource)
-            addView(trackTitle, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(this@PlaybackActivity, 16) })
-            addView(trackArtist, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(this@PlaybackActivity, 12) })
-            addView(trackAlbum, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(this@PlaybackActivity, 6) })
-            addView(TvUi.text(this@PlaybackActivity, 16f, TvUi.TEXT_DIM).apply {
-                text = "OK  play/pause     ◀ ▶  previous/next     Back  pause and close"
-                alpha = 0.7f
-            }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(this@PlaybackActivity, 40) })
+            addView(statusRow)
+            addView(trackTitle, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(ctx, 16) })
+            addView(trackArtist, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(ctx, 12) })
+            addView(trackAlbum, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(ctx, 6) })
+            addView(progressBar, LinearLayout.LayoutParams(MATCH_PARENT, dp(ctx, 6)).apply { topMargin = dp(ctx, 40) })
+            addView(times, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(ctx, 10) })
         }
         val content = LinearLayout(this).apply {
             musicContent = this
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(this@PlaybackActivity, 96), dp(this@PlaybackActivity, 48), dp(this@PlaybackActivity, 96), dp(this@PlaybackActivity, 48))
-            addView(cover, LinearLayout.LayoutParams(dp(this@PlaybackActivity, 340), dp(this@PlaybackActivity, 340)))
-            addView(info, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(this@PlaybackActivity, 56) })
+            setPadding(dp(ctx, 96), dp(ctx, 48), dp(ctx, 96), dp(ctx, 48))
+            addView(coverFrame, LinearLayout.LayoutParams(dp(ctx, 340), dp(ctx, 340)))
+            addView(info, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(ctx, 56) })
         }
+
+        // On-screen controls: shown for a few seconds after a remote button press,
+        // and while paused. The pressed button lights up.
+        fun round(icon: Int, sizeDp: Int) = ImageView(ctx).apply {
+            setImageResource(icon)
+            val pad = dp(ctx, sizeDp / 4)
+            setPadding(pad, pad, pad, pad)
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x33FFFFFF) }
+        }
+        previousButton = round(R.drawable.ic_previous, 56)
+        playPauseButton = round(R.drawable.ic_pause, 72)
+        nextButton = round(R.drawable.ic_next, 56)
+        controls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            alpha = 0f
+            clipChildren = false
+            addView(previousButton, LinearLayout.LayoutParams(dp(ctx, 56), dp(ctx, 56)))
+            addView(playPauseButton, LinearLayout.LayoutParams(dp(ctx, 72), dp(ctx, 72)).apply {
+                marginStart = dp(ctx, 20); marginEnd = dp(ctx, 20)
+            })
+            addView(nextButton, LinearLayout.LayoutParams(dp(ctx, 56), dp(ctx, 56)))
+            addView(TvUi.text(ctx, 16f, TvUi.TEXT_DIM).apply { text = "Back to pause and close" },
+                LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(ctx, 32) })
+        }
+        info.addView(controls, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { topMargin = dp(ctx, 28) })
+        info.clipChildren = false
+
         musicPanel = FrameLayout(this).apply {
             setBackgroundColor(TvUi.BG)
             addView(backdrop, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-            addView(View(this@PlaybackActivity).apply { setBackgroundColor(0xB30E1015.toInt()) },
+            addView(View(ctx).apply { setBackgroundColor(0xB30E1015.toInt()) },
                 FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(content, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         }
         return musicPanel
     }
 
+    /** Playing/paused, position and the on-screen controls; also refreshed every half second. */
+    private fun renderPlayback(state: AirPlaySession.State) {
+        val playing = state.playing
+        statusIcon.setImageResource(if (playing) R.drawable.ic_play else R.drawable.ic_pause)
+        statusText.text = if (playing) "Playing" else "Paused"
+        statusText.setTextColor(if (playing) TvUi.ACCENT else TvUi.TEXT_DIM)
+        statusIcon.setColorFilter(if (playing) TvUi.ACCENT else TvUi.TEXT_DIM)
+        pausedOverlay.visibility = if (playing) View.GONE else View.VISIBLE
+        playPauseButton.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
+
+        val duration = state.durationSec
+        val known = duration > 1
+        progressBar.visibility = if (known) View.VISIBLE else View.INVISIBLE
+        elapsedText.visibility = progressBar.visibility
+        durationText.visibility = progressBar.visibility
+        if (known) {
+            val position = state.positionNow().coerceIn(0.0, duration)
+            val width = progressBar.width
+            if (width > 0) progressFill.layoutParams = progressFill.layoutParams.apply {
+                this.width = (width * position / duration).toInt()
+            }
+            progressFill.requestLayout()
+            elapsedText.text = formatTime(position)
+            durationText.text = formatTime(duration)
+        }
+        // Controls stay visible while paused, so it's clear how to resume; they fade
+        // again a few seconds after playback resumes.
+        if (!playing) showControls(hideAfter = false)
+        else if (!wasPlaying) showControls()
+        wasPlaying = playing
+    }
+
+    private fun formatTime(sec: Double): String {
+        val s = sec.toInt()
+        return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60) else "%d:%02d".format(s / 60, s % 60)
+    }
+
+    private var wasPlaying = true
+
+    private val hideControls = Runnable {
+        if (AirPlaySession.state.playing) controls.animate().alpha(0f).setDuration(400).start()
+    }
+
+    private fun showControls(hideAfter: Boolean = true) {
+        handler.removeCallbacks(hideControls)
+        controls.animate().alpha(1f).setDuration(150).start()
+        if (hideAfter) handler.postDelayed(hideControls, CONTROLS_VISIBLE_MS)
+    }
+
+    /** Lights up the button that was pressed. */
+    private fun flash(button: View) {
+        showControls()
+        button.animate().scaleX(1.2f).scaleY(1.2f).setDuration(100).withEndAction {
+            button.animate().scaleX(1f).scaleY(1f).setDuration(150).start()
+        }.start()
+    }
+
+    private val progressTicker = object : Runnable {
+        override fun run() {
+            if (musicPanel.visibility == View.VISIBLE) renderPlayback(AirPlaySession.state)
+            handler.postDelayed(this, 500)
+        }
+    }
+
     override fun onStart() {
         super.onStart()
         AirPlaySession.observe(observer)
         handler.postDelayed(drift, DRIFT_MS)
+        handler.post(progressTicker)
         onActivity()
     }
 
@@ -190,6 +329,8 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         handler.removeCallbacks(finishRunnable)
         handler.removeCallbacks(drift)
         handler.removeCallbacks(dim)
+        handler.removeCallbacks(progressTicker)
+        handler.removeCallbacks(hideControls)
         super.onStop()
     }
 
@@ -230,10 +371,11 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
                 shownTitle = state.title
                 onActivity()
             }
-            trackSource.text = "AirPlay from $client"
+            trackSource.text = "·  from $client"
             trackTitle.text = state.title ?: "Playing audio"
             trackArtist.text = state.artist ?: ""
             trackAlbum.text = state.album ?: ""
+            renderPlayback(state)
         }
         connectingTitle.text = "Connecting to $client…"
 
@@ -262,6 +404,11 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         }
         if (command != null) {
             AirPlaySession.remoteCommand?.invoke(command)
+            if (music) flash(when (command) {
+                RemoteControl.Command.NEXT -> nextButton
+                RemoteControl.Command.PREVIOUS -> previousButton
+                else -> playPauseButton
+            })
             return true
         }
         return super.onKeyDown(keyCode, event)
@@ -317,5 +464,6 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         const val DRIFT_MS = 60_000L
         const val DIM_AFTER_MS = 5 * 60_000L
         const val DIM_ALPHA = 0.35f
+        const val CONTROLS_VISIBLE_MS = 4_000L
     }
 }

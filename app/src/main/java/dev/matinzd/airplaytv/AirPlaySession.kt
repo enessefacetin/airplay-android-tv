@@ -26,10 +26,20 @@ object AirPlaySession {
         val artist: String? = null,
         val album: String? = null,
         val coverArt: Bitmap? = null,
+        /** AirPlay music: playing (false = paused). */
+        val playing: Boolean = false,
+        /** Track position at [positionAtNs] (System.nanoTime), and track length; 0 = unknown. */
+        val positionSec: Double = 0.0,
+        val positionAtNs: Long = 0,
+        val durationSec: Double = 0.0,
         /** PIN a pairing device must enter, while one is being shown. */
         val pin: String? = null,
     ) {
         val showsVideo get() = mirroring || hlsVideo
+
+        /** Current track position, moving on while playing. */
+        fun positionNow(): Double = if (!playing || positionAtNs == 0L) positionSec
+        else (positionSec + (System.nanoTime() - positionAtNs) / 1e9).coerceAtMost(durationSec.takeIf { it > 0 } ?: Double.MAX_VALUE)
         // A PIN stays up without a connection: the iPhone drops the connection that asked
         // for it and reconnects once the code is typed.
         val active get() = pin != null || connections > 0 && (mirroring || hlsVideo || audioOnly || clientName != null)
@@ -37,6 +47,7 @@ object AirPlaySession {
         fun endSession() = copy(
             clientName = null, clientModel = null, mirroring = false, hlsVideo = false, audioOnly = false,
             videoWidth = 0, videoHeight = 0, title = null, artist = null, album = null, coverArt = null,
+            playing = false, positionSec = 0.0, positionAtNs = 0, durationSec = 0.0,
         )
     }
 

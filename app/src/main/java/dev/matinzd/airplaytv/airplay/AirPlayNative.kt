@@ -53,6 +53,10 @@ object AirPlayNative {
         /** AirPlay volume in dB: -30..0, or -144 for mute. */
         fun onVolume(db: Float)
         fun onCoverArt(jpeg: ByteArray?)
+        /** The sender stopped its audio stream; for AirPlay music this means paused. */
+        fun onAudioStopped()
+        /** Track position and length in seconds. */
+        fun onProgress(positionSec: Double, durationSec: Double)
         fun onMetadata(dmap: ByteArray?)
 
         // AirPlay video (HLS), e.g. YouTube's AirPlay button

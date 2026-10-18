@@ -96,6 +96,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         }
         advertiser = MdnsAdvertiser(this)
         KeepAliveJob.schedule(this)
+        main.post(pauseDetector)
         registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
         worker.execute(::startServer)
     }
@@ -125,6 +126,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
             AirPlayNative.nativeStop()
         }
         worker.shutdown()
+        main.removeCallbacks(pauseDetector)
         AirPlaySession.surfaceSink = null
         AirPlaySession.remoteCommand = null
         AirPlaySession.stopSession = null
@@ -279,12 +281,40 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         // Music started or resumed from the phone: bring the now-playing screen back
         // (it was closed with Back, or the TV was off).
         if (!usingScreen) TvWaker.wake(this)
-        AirPlaySession.update { it.copy(audioOnly = !usingScreen && !it.showsVideo) }
+        AirPlaySession.update {
+            it.copy(audioOnly = !usingScreen && !it.showsVideo)
+        }
     }
 
-    override fun onAudioPcm(data: ByteArray, ptsNs: Long) = audio.playPcm(data, ptsNs)
+    override fun onAudioPcm(data: ByteArray, ptsNs: Long) {
+        audioArrived()
+        audio.playPcm(data, ptsNs)
+    }
 
-    override fun onAudioAac(data: ByteArray, ptsNs: Long) = audio.playAac(data, ptsNs)
+    override fun onAudioAac(data: ByteArray, ptsNs: Long) {
+        audioArrived()
+        audio.playAac(data, ptsNs)
+    }
+
+    // Play/pause state for AirPlay music. Pausing from the phone just stops the audio
+    // packets (there's no explicit message), so: no audio for a while = paused.
+    @Volatile
+    private var lastAudioNs = 0L
+
+    private fun audioArrived() {
+        lastAudioNs = System.nanoTime()
+        if (!AirPlaySession.state.playing) {
+            AirPlaySession.update { it.copy(playing = true, positionAtNs = System.nanoTime()) }
+        }
+    }
+
+    private val pauseDetector = object : Runnable {
+        override fun run() {
+            val state = AirPlaySession.state
+            if (state.audioOnly && state.playing && System.nanoTime() - lastAudioNs > PAUSE_AFTER_NS) onAudioStopped()
+            main.postDelayed(this, 500)
+        }
+    }
 
     override fun onAudioFlush() = audio.flush()
 
@@ -300,6 +330,16 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         // session ends.
         val bitmap = jpeg?.let { BitmapFactory.decodeByteArray(it, 0, it.size) } ?: return
         AirPlaySession.update { it.copy(coverArt = bitmap) }
+    }
+
+    override fun onAudioStopped() {
+        AirPlaySession.update { it.copy(playing = false, positionSec = it.positionNow(), positionAtNs = 0) }
+    }
+
+    override fun onProgress(positionSec: Double, durationSec: Double) {
+        AirPlaySession.update {
+            it.copy(positionSec = positionSec, durationSec = durationSec, positionAtNs = System.nanoTime())
+        }
     }
 
     override fun onMetadata(dmap: ByteArray?) {
@@ -356,6 +396,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         private const val CHANNEL = "airplay_receiver"
         private const val NOTIFICATION_ID = 1
         private const val PIN_TIMEOUT_MS = 60_000L
+        private const val PAUSE_AFTER_NS = 1_200_000_000L
 
         const val ACTION_RESTART = "dev.matinzd.airplaytv.RESTART"
 
