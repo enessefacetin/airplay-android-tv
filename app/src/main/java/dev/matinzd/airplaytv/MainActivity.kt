@@ -48,6 +48,7 @@ class MainActivity : Activity() {
 
         val left = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            clipChildren = false // let the focused button grow past the column edge
             gravity = Gravity.CENTER_VERTICAL
             addView(statusRow)
             addView(name, gap(12))

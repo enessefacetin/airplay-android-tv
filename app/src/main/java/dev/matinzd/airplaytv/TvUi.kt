@@ -46,6 +46,8 @@ object TvUi {
         }
         val pad = dp(context, 24)
         setPadding(pad, dp(context, 18), pad, dp(context, 18))
+        // Grow from the left edge so the card stays aligned with the text above it.
+        if (grow) addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ -> v.pivotX = 0f; v.pivotY = v.height / 2f }
         if (grow) setOnFocusChangeListener { v, focused ->
             v.animate().scaleX(if (focused) 1.05f else 1f).scaleY(if (focused) 1.05f else 1f).setDuration(120).start()
         }
