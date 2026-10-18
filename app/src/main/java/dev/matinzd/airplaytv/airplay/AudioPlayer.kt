@@ -32,6 +32,7 @@ class AudioPlayer(private val sync: AvSync) {
     private val queued = AtomicInteger()
 
     private var track: AudioTrack? = null
+    private var lowLatencyTrack = false
     private var aac: MediaCodec? = null
     private var aacPtsUs = 0L
     private var samplesPerFrame = 1024
@@ -43,11 +44,12 @@ class AudioPlayer(private val sync: AvSync) {
     private var framesWritten = 0L
     private var pipelineNs = -1L
     private val timestamp = AudioTimestamp()
-    private val stats = Stats { pipelineNs }
+    private val stats = Stats()
 
     fun configure(ct: Int, samplesPerFrame: Int, lowLatency: Boolean) = post {
         releaseLocked()
         this.samplesPerFrame = if (samplesPerFrame > 0) samplesPerFrame else 1024
+        lowLatencyTrack = lowLatency
         track = createTrack(lowLatency)
         if (ct == AirPlayNative.AUDIO_AAC_ELD || ct == AirPlayNative.AUDIO_AAC_LC) {
             aac = createAacDecoder(eld = ct == AirPlayNative.AUDIO_AAC_ELD)
@@ -102,23 +104,49 @@ class AudioPlayer(private val sync: AvSync) {
             if (heardAtNs != null) {
                 if (pipelineNs >= 0) sync.reportAudio(now - ptsNs + pipelineNs)
                 val error = heardAtNs - (ptsNs + sync.latencyNs) // > 0: late, < 0: early
+                stats.error(error)
                 when {
+                    error > RESYNC_LATE_NS -> {
+                        // Far behind (e.g. silence queued for a higher latency): start over.
+                        Log.i(TAG, "audio ${error / AvSync.MS} ms late, resyncing")
+                        resetTrack(t)
+                        return
+                    }
                     error > MAX_LATE_NS -> {
                         stats.dropped++
                         return
                     }
                     error < -MAX_EARLY_NS -> {
                         val silence = ((-error) * SAMPLE_RATE / 1_000_000_000L).toInt()
-                            .coerceAtMost(SAMPLE_RATE * 3)
-                        writeSilence(t, silence)
+                            .coerceAtMost(SAMPLE_RATE) // at most 1 s per packet
+                        if (!writeSilence(t, silence)) return
                         stats.silenceFrames += silence
                     }
                 }
-                stats.error(error)
+            } else {
+                stats.noTimestamp++
             }
         }
-        t.write(pcm, offset, length)
+        if (!checkWrite(t, t.write(pcm, offset, length))) return
         framesWritten += frames
+        stats.maybeLog()
+    }
+
+    /** A negative write result means the track is unusable (e.g. audio output changed). */
+    private fun checkWrite(t: AudioTrack, result: Int): Boolean {
+        if (result >= 0) return true
+        Log.w(TAG, "AudioTrack write failed ($result, state ${t.playState}); recreating it")
+        runCatching { t.release() }
+        track = createTrack(lowLatencyTrack)
+        return false
+    }
+
+    private fun resetTrack(t: AudioTrack) {
+        t.pause()
+        t.flush()
+        t.play()
+        framesWritten = 0
+        pipelineNs = -1
     }
 
     /**
@@ -141,16 +169,17 @@ class AudioPlayer(private val sync: AvSync) {
         return heardAt
     }
 
-    private fun writeSilence(t: AudioTrack, frames: Int) {
+    private fun writeSilence(t: AudioTrack, frames: Int): Boolean {
         var remaining = frames * BYTES_PER_FRAME
         val zeros = ByteArray(minOf(remaining, 16 * 1024))
         while (remaining > 0) {
             val n = minOf(remaining, zeros.size)
             val written = t.write(zeros, 0, n)
-            if (written <= 0) return
+            if (!checkWrite(t, written)) return false
             remaining -= written
+            framesWritten += written / BYTES_PER_FRAME
         }
-        framesWritten += frames
+        return true
     }
 
     private fun createTrack(lowLatency: Boolean): AudioTrack {
@@ -258,10 +287,11 @@ class AudioPlayer(private val sync: AvSync) {
         aacPtsUs = 0
     }
 
-    /** Logs how far audio was from its slot, and the corrections made. */
-    private class Stats(val deviceLatencyNs: () -> Long) {
+    /** Logs, every 5 s, how far audio was from its slot and what the track is doing. */
+    private inner class Stats {
         var dropped = 0
         var silenceFrames = 0L
+        var noTimestamp = 0
         private var count = 0
         private var errorSumNs = 0L
         private var windowStart = System.nanoTime()
@@ -269,13 +299,21 @@ class AudioPlayer(private val sync: AvSync) {
         fun error(errorNs: Long) {
             count++
             errorSumNs += errorNs
+            maybeLog()
+        }
+
+        fun maybeLog() {
             val elapsed = System.nanoTime() - windowStart
-            if (elapsed >= 5_000_000_000L) {
-                Log.i(TAG, "sync error avg %d ms, dropped %d packets, inserted %d ms silence, device latency %d ms".format(
-                    errorSumNs / count / AvSync.MS, dropped, silenceFrames * 1000 / SAMPLE_RATE, deviceLatencyNs() / AvSync.MS))
-                windowStart = System.nanoTime()
-                count = 0; errorSumNs = 0; dropped = 0; silenceFrames = 0
-            }
+            if (elapsed < 5_000_000_000L) return
+            val t = track
+            val queuedMs = if (t != null) (framesWritten - t.playbackHeadPosition.toLong()) * 1000 / SAMPLE_RATE else 0
+            Log.i(TAG, ("sync error avg %d ms, dropped %d, silence %d ms, no-timestamp %d, " +
+                "queued %d ms, device latency %d ms, state %d, backlog %d").format(
+                if (count > 0) errorSumNs / count / AvSync.MS else 0, dropped,
+                silenceFrames * 1000 / SAMPLE_RATE, noTimestamp, queuedMs, pipelineNs / AvSync.MS,
+                t?.playState ?: -1, queued.get()))
+            windowStart = System.nanoTime()
+            count = 0; errorSumNs = 0; dropped = 0; silenceFrames = 0; noTimestamp = 0
         }
     }
 
@@ -288,6 +326,7 @@ class AudioPlayer(private val sync: AvSync) {
         private const val BYTES_PER_FRAME = 4
         private const val MAX_QUEUED = 400
         private const val MAX_LATE_NS = 25 * AvSync.MS
+        private const val RESYNC_LATE_NS = 150 * AvSync.MS
         private const val MAX_EARLY_NS = 15 * AvSync.MS
     }
 }

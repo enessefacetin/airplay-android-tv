@@ -25,4 +25,4 @@ mkdir -p build
 echo "== Following app logs (Ctrl-C to stop)"
 "$ADB" logcat -c
 "$ADB" logcat -v time -s AirPlayService AirPlayNative UxPlay VideoDecoder AudioPlayer AvSync \
-    HlsPlayer ExoPlayerImpl MediaCodecVideoRenderer MdnsAdvertiser TvWaker AndroidRuntime DEBUG | tee build/logcat.log
+    HlsPlayer ExoPlayerImpl MediaCodecVideoRenderer MdnsAdvertiser TvWaker AudioTrack AndroidRuntime DEBUG | tee build/logcat.log
