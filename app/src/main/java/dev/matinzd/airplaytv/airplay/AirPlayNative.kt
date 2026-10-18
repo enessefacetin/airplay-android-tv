@@ -39,6 +39,8 @@ object AirPlayNative {
          * on the System.nanoTime() clock (0 until clock sync is established).
          */
         fun onVideoData(data: ByteArray, ptsNs: Long)
+        /** Codec of the next mirror stream (H.265 when the sender uses 4K/HEVC). */
+        fun onVideoCodec(isHevc: Boolean)
         fun onVideoReset(type: Int)
         fun onVideoFlush()
 

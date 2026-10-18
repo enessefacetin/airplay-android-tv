@@ -113,7 +113,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         val debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         val keyFile = File(filesDir, "airplay-key.pem").absolutePath
         val language = Locale.getDefault().toLanguageTag()
-        val rc = AirPlayNative.nativeStart(this, name, hardwareAddress(), keyFile, 1920, 1080, 60, language, debug)
+        val rc = AirPlayNative.nativeStart(this, name, hardwareAddress(), keyFile, 3840, 2160, 60, language, debug)
         if (rc != 0) {
             Log.e(TAG, "AirPlay server failed to start: $rc")
             AirPlaySession.update { it.copy(serverRunning = false, error = "Server failed to start ($rc)") }
@@ -230,6 +230,8 @@ class AirPlayService : Service(), AirPlayNative.Listener {
     private fun endVideo(state: AirPlaySession.State) =
         if (state.showsVideo) state
         else state.copy(videoWidth = 0, videoHeight = 0, clientName = if (state.audioOnly) state.clientName else null)
+
+    override fun onVideoCodec(isHevc: Boolean) = video.setCodec(isHevc)
 
     override fun onVideoFlush() = Unit
 

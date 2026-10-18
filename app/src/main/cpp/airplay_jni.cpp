@@ -71,7 +71,7 @@ dnssd_t *g_dnssd = nullptr;
 jobject g_listener = nullptr;       // global ref to AirPlayNative.Listener
 struct {
     jmethodID onClientRequest, onConnectionCount, onConnectionLost;
-    jmethodID onVideoData, onVideoReset, onVideoFlush;
+    jmethodID onVideoData, onVideoCodec, onVideoReset, onVideoFlush;
     jmethodID onAudioFormat, onAudioPcm, onAudioAac, onAudioFlush;
     jmethodID onVolume, onCoverArt, onMetadata;
     jmethodID onVideoPlay, onVideoScrub, onVideoRate, onVideoStop, onVideoPlaylistRemove, onVideoPlaybackInfo;
@@ -299,8 +299,9 @@ void cb_report_client_request(void *, char *deviceid, char *model, char *name, b
 }
 
 int cb_video_set_codec(void *, video_codec_t codec) {
-    // Only H.264 is advertised (features bit 42 off), so H.265 should never arrive.
-    return codec == VIDEO_CODEC_H265 ? -1 : 0;
+    LOG_I("mirror codec %s", codec == VIDEO_CODEC_H265 ? "H.265" : "H.264");
+    call_listener(m.onVideoCodec, (jboolean) (codec == VIDEO_CODEC_H265));
+    return 0;
 }
 
 /* One access unit, Annex-B (start codes), SPS/PPS prepended to IDR frames. */
@@ -475,10 +476,11 @@ void cb_on_video_acquire_playback_info(void *, playback_info_t *info) {
 /* ---- server lifecycle ----------------------------------------------------- */
 
 void set_features(dnssd_t *d) {
-    /* UxPlay's start_dnssd() defaults with HLS on ("-hls"): no H.265, AirPlay 2
-       pairing rather than legacy pairing. */
+    /* UxPlay's start_dnssd() defaults with HLS ("-hls") and H.265 ("-h265") on, and
+       AirPlay 2 pairing rather than legacy pairing. */
     static const int on_bits[] = {0 /* video */, 1, 2, 4 /* HLS */, 5, 6, 7, 9, 10, 11, 12, 13,
-                                  14, 15, 16, 17, 18, 19, 20, 21, 22, 25, 28, 30};
+                                  14, 15, 16, 17, 18, 19, 20, 21, 22, 25, 28, 30,
+                                  42 /* screen multi-codec: H.265 (4K) mirroring */};
     for (int bit = 0; bit < 64; bit++) dnssd_set_airplay_features(d, bit, 0);
     for (int bit : on_bits) dnssd_set_airplay_features(d, bit, 1);
 }
@@ -514,6 +516,7 @@ jint native_start(JNIEnv *env, jclass, jobject listener, jstring jname, jbyteArr
     m.onConnectionCount = env->GetMethodID(cls, "onConnectionCount", "(I)V");
     m.onConnectionLost = env->GetMethodID(cls, "onConnectionLost", "(I)V");
     m.onVideoData = env->GetMethodID(cls, "onVideoData", "([BJ)V");
+    m.onVideoCodec = env->GetMethodID(cls, "onVideoCodec", "(Z)V");
     m.onVideoReset = env->GetMethodID(cls, "onVideoReset", "(I)V");
     m.onVideoFlush = env->GetMethodID(cls, "onVideoFlush", "()V");
     m.onAudioFormat = env->GetMethodID(cls, "onAudioFormat", "(IIZZ)V");

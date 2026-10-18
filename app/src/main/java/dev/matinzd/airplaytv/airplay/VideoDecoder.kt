@@ -12,7 +12,7 @@ import android.view.Surface
 import java.nio.ByteBuffer
 
 /**
- * H.264 mirror stream -> MediaCodec -> Surface, on the shared [AvSync] timeline.
+ * H.264 / H.265 mirror stream -> MediaCodec -> Surface, on the shared [AvSync] timeline.
  *
  * Frames wait here, still compressed, until just before their slot
  * (`timestamp + sync latency - decode time`), then are decoded and shown at the
@@ -34,11 +34,13 @@ class VideoDecoder(
 
     private var surface: Surface? = null
     private var codec: MediaCodec? = null
+    private var hevc = false
+    private var vps: ByteArray? = null
     private var sps: ByteArray? = null
     private var pps: ByteArray? = null
     private var errorRetries = 0
     private var lastStartFailureNs = 0L
-    private var loggedDecoders = false
+    private val loggedDecoders = mutableSetOf<String>()
 
     private class Frame(val data: ByteArray, val ptsNs: Long, val arrivalNs: Long)
 
@@ -67,9 +69,10 @@ class VideoDecoder(
         var toRelease: MediaCodec? = null
         synchronized(lock) {
             var keyframe = false
-            for (nal in H264.leadingNals(data)) {
-                when (nal.type) {
-                    H264.NAL_SPS -> {
+            for (nal in VideoNal.leadingUnits(data, hevc)) {
+                when (nal.kind) {
+                    VideoNal.Kind.PARAM_VPS -> vps = data.copyOfRange(nal.start, nal.end)
+                    VideoNal.Kind.PARAM_SPS -> {
                         val newSps = data.copyOfRange(nal.start, nal.end)
                         if (!newSps.contentEquals(sps)) {
                             // New resolution (rotation) or new stream: start a fresh decoder.
@@ -77,8 +80,9 @@ class VideoDecoder(
                             toRelease = detachCodecLocked()
                         }
                     }
-                    H264.NAL_PPS -> pps = data.copyOfRange(nal.start, nal.end)
-                    H264.NAL_IDR -> keyframe = true
+                    VideoNal.Kind.PARAM_PPS -> pps = data.copyOfRange(nal.start, nal.end)
+                    VideoNal.Kind.KEYFRAME -> keyframe = true
+                    else -> Unit
                 }
             }
             stats.received()
@@ -133,11 +137,26 @@ class VideoDecoder(
         }
     }
 
+    /** Codec of the next mirror stream, announced before its first frame. */
+    fun setCodec(isHevc: Boolean) {
+        var toRelease: MediaCodec? = null
+        synchronized(lock) {
+            if (isHevc == hevc) return
+            Log.i(TAG, "mirror codec: ${if (isHevc) "H.265" else "H.264"}")
+            toRelease = detachCodecLocked()
+            hevc = isHevc
+            vps = null; sps = null; pps = null
+            gop.clear(); gopBytes = 0; gopOverflow = false
+        }
+        toRelease?.let(::release)
+    }
+
     /** The mirror stream ended. */
     fun reset() {
         var toRelease: MediaCodec? = null
         synchronized(lock) {
             toRelease = detachCodecLocked()
+            vps = null
             sps = null
             pps = null
             gop.clear()
@@ -162,14 +181,21 @@ class VideoDecoder(
         if (System.nanoTime() - lastStartFailureNs < START_RETRY_DELAY_NS) return
         var c: MediaCodec? = null
         try {
-            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, 1920, 1080).apply {
-                setByteBuffer("csd-0", ByteBuffer.wrap(spsBytes))
-                setByteBuffer("csd-1", ByteBuffer.wrap(ppsBytes))
-                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 4 * 1024 * 1024)
+            val mime = if (hevc) MediaFormat.MIMETYPE_VIDEO_HEVC else MediaFormat.MIMETYPE_VIDEO_AVC
+            val format = MediaFormat.createVideoFormat(mime, 3840, 2160).apply {
+                if (hevc) {
+                    // HEVC takes VPS + SPS + PPS together as csd-0.
+                    val vpsBytes = vps ?: return
+                    setByteBuffer("csd-0", ByteBuffer.wrap(vpsBytes + spsBytes + ppsBytes))
+                } else {
+                    setByteBuffer("csd-0", ByteBuffer.wrap(spsBytes))
+                    setByteBuffer("csd-1", ByteBuffer.wrap(ppsBytes))
+                }
+                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 8 * 1024 * 1024)
                 setInteger(MediaFormat.KEY_PRIORITY, 0) // real-time
                 if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
-            c = createLowLatencyDecoder()
+            c = createLowLatencyDecoder(mime)
             c.setCallback(Callback(), handler)
             c.configure(format, s, null, 0)
             c.start()
@@ -185,20 +211,19 @@ class VideoDecoder(
         }
     }
 
-    private fun createLowLatencyDecoder(): MediaCodec {
-        val mime = MediaFormat.MIMETYPE_VIDEO_AVC
+    private fun createLowLatencyDecoder(mime: String): MediaCodec {
         val candidates = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
             .filter { !it.isEncoder && it.supportedTypes.any { t -> t.equals(mime, ignoreCase = true) } }
         val lowLatency = candidates.firstOrNull {
             it.getCapabilitiesForType(mime)
                 .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
         }
-        if (!loggedDecoders) Log.i(TAG, "AVC decoders: " + candidates.joinToString {
+        if (mime !in loggedDecoders) Log.i(TAG, "$mime decoders: " + candidates.joinToString {
             val ll = it.getCapabilitiesForType(mime)
                 .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
             "${it.name}${if (ll) " (low-latency)" else ""}"
         })
-        loggedDecoders = true
+        loggedDecoders += mime
         return if (lowLatency != null) MediaCodec.createByCodecName(lowLatency.name)
         else MediaCodec.createDecoderByType(mime)
     }
