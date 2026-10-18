@@ -53,6 +53,9 @@ add_library(alac STATIC
         ${AL}/ALACDecoder.cpp ${AL}/ALACBitUtilities.c ${AL}/EndianPortable.c
         ${AL}/ag_dec.c ${AL}/dp_dec.c ${AL}/matrix_dec.c)
 target_include_directories(alac PUBLIC ${AL})
+# EndianPortable.c only recognises x86 and Windows as little-endian; without this
+# it skips byte swaps on ARM and Init() rejects the magic cookie.
+target_compile_definitions(alac PRIVATE TARGET_RT_LITTLE_ENDIAN=1)
 target_compile_options(alac PRIVATE -O2 -w)
 
 # ---- JNI bridge ----
