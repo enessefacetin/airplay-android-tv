@@ -16,6 +16,9 @@ Without support, YouTube only sent audio.
   stop from the phone, and reports position to it.
 - Report "still playing" to `/playback-info` until a video has ended: the iPhone
   polls before playback starts, and "finished" made it give up.
+- On a playback error, release the player and report "finished": the iPhone then
+  stops too, instead of showing "playing" over a frozen frame. Show the error on
+  the TV for 10 s, with its own text for DRM errors (added 2026-10-18).
 - Wake the TV on `/play` (HLS doesn't go through RTSP SETUP).
 - If mirroring frames arrive while a video plays, stop the video and wait for it to
   release the Surface first.
@@ -23,4 +26,5 @@ Without support, YouTube only sent audio.
 ## Consequences
 
 - Needs the local httpd patch (ADR 0002).
-- DRM (FairPlay) video such as Apple TV+ cannot play.
+- DRM (FairPlay) video such as Apple TV+ cannot play. Its clear intro plays, then
+  ExoPlayer fails with `UnsupportedDrmException` at the first encrypted segment.

@@ -26,6 +26,8 @@ class HlsPlayer(
     private val context: Context,
     private val onVideoSize: (width: Int, height: Int) -> Unit,
     private val onEnded: () -> Unit,
+    /** Playback failed; [protected] = DRM (FairPlay) video, which Android can't decrypt. */
+    private val onError: (protected: Boolean) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private var player: ExoPlayer? = null
@@ -134,6 +136,11 @@ class HlsPlayer(
 
         override fun onPlayerError(error: PlaybackException) {
             Log.e(TAG, "playback error", error)
+            // Apple TV+ plays its clear intro, then fails at the first FairPlay segment.
+            // Let go of the frozen frame and report "finished", so the iPhone stops too.
+            releasePlayer()
+            snapshot = Snapshot(ended = true)
+            onError(error.errorCode in PlaybackException.ERROR_CODE_DRM_UNSPECIFIED..PlaybackException.ERROR_CODE_DRM_LICENSE_EXPIRED)
         }
     }
 

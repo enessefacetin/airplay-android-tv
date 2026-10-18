@@ -37,7 +37,8 @@ Status as of 2026-10-18 (end of the first development session).
 
 ## Known limits
 
-- No FairPlay DRM video (Apple TV+, Netflix casting).
+- No FairPlay DRM video (Apple TV+, Netflix casting). The TV shows a message that
+  points to the Apple TV app for Google TV.
 - No AirPlay 2 multi-room audio (sync with HomePods).
 - Only `armeabi-v7a` is built; other devices need more ABIs.
 - The sender's volume and the TV/receiver volume are independent (ADR 0017, rejected:

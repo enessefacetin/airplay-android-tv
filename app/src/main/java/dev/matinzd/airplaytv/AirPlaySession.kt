@@ -34,7 +34,11 @@ object AirPlaySession {
         val durationSec: Double = 0.0,
         /** PIN a pairing device must enter, while one is being shown. */
         val pin: String? = null,
+        /** AirPlay video that couldn't play, shown for a few seconds. */
+        val videoError: VideoError? = null,
     ) {
+        enum class VideoError { PROTECTED, FAILED }
+
         val showsVideo get() = mirroring || hlsVideo
 
         /** Current track position, moving on while playing. */
@@ -42,7 +46,8 @@ object AirPlaySession {
         else (positionSec + (System.nanoTime() - positionAtNs) / 1e9).coerceAtMost(durationSec.takeIf { it > 0 } ?: Double.MAX_VALUE)
         // A PIN stays up without a connection: the iPhone drops the connection that asked
         // for it and reconnects once the code is typed.
-        val active get() = pin != null || connections > 0 && (mirroring || hlsVideo || audioOnly || clientName != null)
+        // A video error stays up after the iPhone disconnects, so it can be read.
+        val active get() = pin != null || videoError != null || connections > 0 && (mirroring || hlsVideo || audioOnly || clientName != null)
 
         fun endSession() = copy(
             clientName = null, clientModel = null, mirroring = false, hlsVideo = false, audioOnly = false,

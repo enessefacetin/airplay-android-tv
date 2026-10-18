@@ -85,6 +85,12 @@ class AirPlayService : Service(), AirPlayNative.Listener {
             this,
             onVideoSize = { width, height -> AirPlaySession.update { it.copy(videoWidth = width, videoHeight = height) } },
             onEnded = { AirPlaySession.update { it.copy(hlsVideo = false) } },
+            onError = { protected ->
+                val error = if (protected) AirPlaySession.State.VideoError.PROTECTED else AirPlaySession.State.VideoError.FAILED
+                AirPlaySession.update { it.copy(hlsVideo = false, videoError = error) }
+                main.removeCallbacks(clearVideoError)
+                main.postDelayed(clearVideoError, VIDEO_ERROR_MS)
+            },
         )
         // Mirroring and AirPlay video never run at the same time; both draw on the playback screen.
         remote = RemoteControl(this)
@@ -127,6 +133,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         }
         worker.shutdown()
         main.removeCallbacks(pauseDetector)
+        main.removeCallbacks(clearVideoError)
         AirPlaySession.surfaceSink = null
         AirPlaySession.remoteCommand = null
         AirPlaySession.stopSession = null
@@ -238,8 +245,8 @@ class AirPlayService : Service(), AirPlayNative.Listener {
             Log.i(TAG, "mirroring resumed while AirPlay video was active; stopping the video")
             hls.stopAndWait()
         }
-        if (!state.mirroring || state.hlsVideo) {
-            AirPlaySession.update { it.copy(mirroring = true, hlsVideo = false, audioOnly = false) }
+        if (!state.mirroring || state.hlsVideo || state.videoError != null) {
+            AirPlaySession.update { it.copy(mirroring = true, hlsVideo = false, audioOnly = false, videoError = null) }
         }
         video.onFrame(data, ptsNs)
     }
@@ -350,7 +357,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
     override fun onVideoPlay(url: String, startSec: Float) {
         // AirPlay video doesn't go through RTSP SETUP, so wake the TV here too.
         AirPlaySession.update {
-            it.copy(hlsVideo = true, mirroring = false, audioOnly = false, clientName = it.clientName ?: "iPhone")
+            it.copy(hlsVideo = true, mirroring = false, audioOnly = false, videoError = null, clientName = it.clientName ?: "iPhone")
         }
         TvWaker.wake(this)
         hls.play(url, startSec)
@@ -368,6 +375,8 @@ class AirPlayService : Service(), AirPlayNative.Listener {
     override fun onVideoPlaylistRemove(): Float = hls.pauseAndGetPosition()
 
     override fun onVideoPlaybackInfo(): DoubleArray = hls.playbackInfo()
+
+    private val clearVideoError = Runnable { AirPlaySession.update { it.copy(videoError = null) } }
 
     override fun onDisplayPin(pin: String?) {
         Log.i(TAG, "showing a pairing PIN")
@@ -396,6 +405,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         private const val CHANNEL = "airplay_receiver"
         private const val NOTIFICATION_ID = 1
         private const val PIN_TIMEOUT_MS = 60_000L
+        private const val VIDEO_ERROR_MS = 10_000L
         private const val PAUSE_AFTER_NS = 1_200_000_000L
 
         const val ACTION_RESTART = "dev.matinzd.airplaytv.RESTART"

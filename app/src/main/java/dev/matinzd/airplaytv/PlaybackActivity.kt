@@ -41,6 +41,10 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var connectingPanel: View
     private lateinit var connectingTitle: TextView
 
+    private lateinit var errorPanel: View
+    private lateinit var errorTitle: TextView
+    private lateinit var errorHint: TextView
+
     private lateinit var pinPanel: View
     private lateinit var pinDigits: List<TextView>
     private lateinit var pinHint: TextView
@@ -94,6 +98,7 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
             addView(videoFrame, AspectRatioFrameLayout.centered())
             addView(buildMusicPanel(), FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(buildConnectingPanel(), FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            addView(buildErrorPanel(), FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(buildPinPanel(), FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         })
     }
@@ -117,6 +122,22 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
                 })
         }
         return connectingPanel
+    }
+
+    private fun buildErrorPanel(): View {
+        errorTitle = TvUi.text(this, 34f, bold = true).apply { gravity = Gravity.CENTER }
+        errorHint = TvUi.text(this, 22f, TvUi.TEXT_DIM).apply { gravity = Gravity.CENTER }
+        errorPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(TvUi.BG)
+            setPadding(dp(this@PlaybackActivity, 96), 0, dp(this@PlaybackActivity, 96), 0)
+            addView(errorTitle)
+            addView(errorHint, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
+                topMargin = dp(this@PlaybackActivity, 24)
+            })
+        }
+        return errorPanel
     }
 
     private fun buildPinPanel(): View {
@@ -386,10 +407,13 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
 
         val pin = state.pin
         val showPin = pin != null
-        val showMusic = !showPin && state.audioOnly && !state.showsVideo
+        val videoError = state.videoError
+        val showError = !showPin && videoError != null
+        val showMusic = !showPin && !showError && state.audioOnly && !state.showsVideo
         // After the session ends, stay black while closing instead of "Connecting…".
-        val showConnecting = !showPin && !showMusic && !showVideo && !sessionOver
+        val showConnecting = !showPin && !showError && !showMusic && !showVideo && !sessionOver
         pinPanel.visibility = if (showPin) View.VISIBLE else View.GONE
+        errorPanel.visibility = if (showError) View.VISIBLE else View.GONE
         musicPanel.visibility = if (showMusic) View.VISIBLE else View.GONE
         connectingPanel.visibility = if (showConnecting) View.VISIBLE else View.GONE
 
@@ -397,6 +421,18 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         if (pin != null) {
             pinDigits.forEachIndexed { i, digit -> digit.text = pin.getOrNull(i)?.toString() ?: "" }
             pinHint.text = "You only need to do this once for each device"
+        }
+        when (videoError) {
+            AirPlaySession.State.VideoError.PROTECTED -> {
+                errorTitle.text = "This video is protected"
+                errorHint.text = "Protected videos, such as Apple TV+, cannot play over AirPlay on this TV.\n" +
+                    "Use the Apple TV app on this TV."
+            }
+            AirPlaySession.State.VideoError.FAILED -> {
+                errorTitle.text = "This video cannot play"
+                errorHint.text = "Try again, or use screen mirroring."
+            }
+            null -> Unit
         }
         if (showMusic) {
             if (state.coverArt != null) {
@@ -491,6 +527,8 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         val state = AirPlaySession.state
+        // Otherwise the home screen opens this screen again while the error is up.
+        if (state.videoError != null) AirPlaySession.update { it.copy(videoError = null) }
         if (state.audioOnly && !state.showsVideo) {
             AirPlaySession.remoteCommand?.invoke(RemoteControl.Command.PAUSE)
         } else if (state.active) {

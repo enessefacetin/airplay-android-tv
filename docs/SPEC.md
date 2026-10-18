@@ -77,8 +77,12 @@ Expected added delay: mirroring 0-50 ms without sound, about 160 ms with sound; 
 
 - UxPlay serves the playlists on `http://localhost:7000/master.m3u8`; Media3 ExoPlayer plays them.
 - Phone controls: play, pause (`/rate`), seek (`/scrub`), stop; position is reported to the phone.
-- `/playback-info` reports "still playing" until the video has ended.
+- `/playback-info` reports "still playing" until the video has ended or failed.
 - Closing the video on the phone returns to mirroring if mirroring was on.
+- If playback fails, the player stops, the phone is told the video has finished, and
+  the TV shows a message for 10 s (Back closes it). Protected (DRM) video such as
+  Apple TV+ plays its clear intro, then fails: the message says to use the Apple TV
+  app on the TV. Other errors say "This video cannot play".
 
 ## 7. Music screen
 
@@ -133,7 +137,7 @@ Any change restarts the receiver and re-announces it.
   (Return to AirPlay when active, Settings), IP and port, a warning if waking isn't set up.
 - Settings (`SettingsActivity`): full-width rows with the current value on the right.
 - Playback (`PlaybackActivity`): pairing code, connecting (icon + spinner), music,
-  or video.
+  video, or a video error.
 
 ## 12. Not supported
 

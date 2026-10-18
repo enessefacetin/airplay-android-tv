@@ -49,6 +49,14 @@ class SessionStateTest {
     }
 
     @Test
+    fun videoErrorStaysUpAfterSessionEnds() {
+        // The iPhone disconnects once told the video can't play; the message stays.
+        val state = State(connections = 1, hlsVideo = true, videoError = State.VideoError.PROTECTED).endSession()
+        assertEquals(State.VideoError.PROTECTED, state.videoError)
+        assertTrue(state.copy(connections = 0).active)
+    }
+
+    @Test
     fun endSessionClearsTrack() {
         val state = State(
             audioOnly = true, title = "Song", artist = "Artist", album = "Album", playing = true,
