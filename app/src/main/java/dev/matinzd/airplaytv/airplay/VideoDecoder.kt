@@ -37,6 +37,8 @@ class VideoDecoder(
     private var sps: ByteArray? = null
     private var pps: ByteArray? = null
     private var errorRetries = 0
+    private var lastStartFailureNs = 0L
+    private var loggedDecoders = false
 
     private class Frame(val data: ByteArray, val ptsNs: Long, val arrivalNs: Long)
 
@@ -122,6 +124,7 @@ class VideoDecoder(
             toRelease = detachCodecLocked()
             surface = newSurface
             errorRetries = 0
+            lastStartFailureNs = 0
             if (toRelease == null) startCodecLocked()
         }
         toRelease?.let {
@@ -154,6 +157,10 @@ class VideoDecoder(
         val spsBytes = sps ?: return
         val ppsBytes = pps ?: return
         if (gop.isEmpty()) return
+        // After a failure (e.g. the Surface is still attached to the video player), don't
+        // retry on every incoming frame.
+        if (System.nanoTime() - lastStartFailureNs < START_RETRY_DELAY_NS) return
+        var c: MediaCodec? = null
         try {
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, 1920, 1080).apply {
                 setByteBuffer("csd-0", ByteBuffer.wrap(spsBytes))
@@ -162,7 +169,7 @@ class VideoDecoder(
                 setInteger(MediaFormat.KEY_PRIORITY, 0) // real-time
                 if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
-            val c = createLowLatencyDecoder()
+            c = createLowLatencyDecoder()
             c.setCallback(Callback(), handler)
             c.configure(format, s, null, 0)
             c.start()
@@ -173,6 +180,8 @@ class VideoDecoder(
             Log.i(TAG, "decoder ${c.name} started, replaying ${gop.size} frames")
         } catch (e: Exception) {
             Log.e(TAG, "failed to start decoder", e)
+            c?.release()
+            lastStartFailureNs = System.nanoTime()
         }
     }
 
@@ -184,11 +193,12 @@ class VideoDecoder(
             it.getCapabilitiesForType(mime)
                 .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
         }
-        Log.i(TAG, "AVC decoders: " + candidates.joinToString {
+        if (!loggedDecoders) Log.i(TAG, "AVC decoders: " + candidates.joinToString {
             val ll = it.getCapabilitiesForType(mime)
                 .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
             "${it.name}${if (ll) " (low-latency)" else ""}"
         })
+        loggedDecoders = true
         return if (lowLatency != null) MediaCodec.createByCodecName(lowLatency.name)
         else MediaCodec.createDecoderByType(mime)
     }
@@ -346,6 +356,7 @@ class VideoDecoder(
     private companion object {
         const val TAG = "VideoDecoder"
         const val MAX_GOP_BYTES = 48L * 1024 * 1024
+        const val START_RETRY_DELAY_NS = 250_000_000L
         const val MIN_SCHEDULE_NS = 2_000_000L     // closer than this: just render now
         const val MAX_SCHEDULE_NS = 500_000_000L   // further than this: timestamps are off, render now
     }

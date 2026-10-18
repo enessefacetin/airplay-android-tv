@@ -11,6 +11,8 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Plays AirPlay video (HLS, e.g. YouTube's AirPlay button). UxPlay serves the
@@ -77,6 +79,20 @@ class HlsPlayer(
     }
 
     fun stop() = onMain { releasePlayer() }
+
+    /** Stops and waits (up to 1 s) until the player has let go of the Surface. */
+    fun stopAndWait() {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            releasePlayer()
+            return
+        }
+        val done = CountDownLatch(1)
+        main.post {
+            releasePlayer()
+            done.countDown()
+        }
+        done.await(1, TimeUnit.SECONDS)
+    }
 
     fun setSurface(newSurface: Surface?) = onMain {
         surface = newSurface

@@ -191,7 +191,16 @@ class AirPlayService : Service(), AirPlayNative.Listener {
     }
 
     override fun onVideoData(data: ByteArray, ptsNs: Long) {
-        if (!AirPlaySession.state.mirroring) AirPlaySession.update { it.copy(mirroring = true, audioOnly = false) }
+        val state = AirPlaySession.state
+        if (state.hlsVideo) {
+            // The iPhone went back to mirroring without stopping the video first:
+            // free the Surface before the mirror decoder needs it.
+            Log.i(TAG, "mirroring resumed while AirPlay video was active; stopping the video")
+            hls.stopAndWait()
+        }
+        if (!state.mirroring || state.hlsVideo) {
+            AirPlaySession.update { it.copy(mirroring = true, hlsVideo = false, audioOnly = false) }
+        }
         video.onFrame(data, ptsNs)
     }
 

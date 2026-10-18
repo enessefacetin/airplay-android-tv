@@ -19,8 +19,8 @@ tv pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
 tv dumpsys deviceidle whitelist +"$PKG"
 tv appops set "$PKG" RUN_ANY_IN_BACKGROUND allow 2>/dev/null || true
 
-echo "== Starting the receiver service"
-tv am start-foreground-service -n "$PKG/.AirPlayService"
+echo "== Starting the receiver (opening the app starts its service)"
+tv am start -n "$PKG/.MainActivity"
 
 echo "== Device state (for wake-from-standby)"
 echo -n "hdmi_control_enabled (CEC, null = default on): "; tv settings get global hdmi_control_enabled
