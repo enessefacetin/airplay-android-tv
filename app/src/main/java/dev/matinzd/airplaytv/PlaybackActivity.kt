@@ -156,7 +156,7 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
             addView(trackArtist, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(this@PlaybackActivity, 12) })
             addView(trackAlbum, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(this@PlaybackActivity, 6) })
             addView(TvUi.text(this@PlaybackActivity, 16f, TvUi.TEXT_DIM).apply {
-                text = "OK  play/pause     ◀ ▶  previous/next     Back  stop"
+                text = "OK  play/pause     ◀ ▶  previous/next     Back  pause and close"
                 alpha = 0.7f
             }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(this@PlaybackActivity, 40) })
         }
@@ -267,10 +267,19 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         return super.onKeyDown(keyCode, event)
     }
 
-    /** Back stops AirPlay, as on an Apple TV. Home leaves it running. */
+    /**
+     * Back, as on an Apple TV: music is paused and stays connected (the iPhone doesn't
+     * notice a dropped audio connection, so disconnecting left it showing "connected");
+     * mirroring and video are disconnected. Home leaves everything running.
+     */
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (AirPlaySession.state.active) AirPlaySession.stopSession?.invoke()
+        val state = AirPlaySession.state
+        if (state.audioOnly && !state.showsVideo) {
+            AirPlaySession.remoteCommand?.invoke(RemoteControl.Command.PAUSE)
+        } else if (state.active) {
+            AirPlaySession.stopSession?.invoke()
+        }
         finish()
     }
 

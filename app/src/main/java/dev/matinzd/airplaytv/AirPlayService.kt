@@ -276,6 +276,9 @@ class AirPlayService : Service(), AirPlayNative.Listener {
     override fun onAudioFormat(ct: Int, samplesPerFrame: Int, usingScreen: Boolean, isMedia: Boolean) {
         sync.audioOnly = !usingScreen
         audio.configure(ct, samplesPerFrame, lowLatency = usingScreen)
+        // Music started or resumed from the phone: bring the now-playing screen back
+        // (it was closed with Back, or the TV was off).
+        if (!usingScreen) TvWaker.wake(this)
         AirPlaySession.update { it.copy(audioOnly = !usingScreen && !it.showsVideo) }
     }
 
