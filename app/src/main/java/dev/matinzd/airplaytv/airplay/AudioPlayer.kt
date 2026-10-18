@@ -46,10 +46,8 @@ class AudioPlayer(private val sync: AvSync) {
     private var framesWritten = 0L
     private var pipelineNs = -1L
     private val timestamp = AudioTimestamp()
-    // Silence inserted to delay audio, as (end frame, frames), until it has played out.
-    private val pendingSilence = ArrayDeque<LongArray>()
-    // Frames actually heard by now (from the track's timestamp), or -1 if unknown.
-    private var presentedFrames = -1L
+    // Audio held in the track before playback starts (its start threshold).
+    private var startBufferNs = 0L
     private val stats = Stats()
 
     fun configure(ct: Int, samplesPerFrame: Int, lowLatency: Boolean) = post {
@@ -78,9 +76,7 @@ class AudioPlayer(private val sync: AvSync) {
         runCatching { aac?.flush() }
         aacPtsUs = 0
         framesWritten = 0
-        pendingSilence.clear()
-        presentedFrames = -1
-    }
+            }
 
     fun setVolume(gain: Float) = post {
         this.gain = gain
@@ -116,12 +112,13 @@ class AudioPlayer(private val sync: AvSync) {
             if (!t.getTimestamp(timestamp)) stats.noTimestamp++
             val heardAtNs = nextFrameHeardAtNs(t, now)
             if (heardAtNs != null) {
-                // What audio needs: how late it arrived + the track's natural buffering +
-                // device latency. Not the silence we inserted on purpose, and not time spent
-                // in our own queue (counting either would feed back on itself).
-                val pendingNs = pendingSilenceNs(t)
-                val needNs = (arrivalNs - ptsNs) + (heardAtNs - now) - pendingNs
-                stats.need(arrivalNs - ptsNs, heardAtNs - now, pendingNs, needNs)
+                // What audio needs: how late it arrived + the device's output latency + the
+                // track's start buffer. Deliberately nothing that depends on what's queued:
+                // the queue holds the silence we insert to delay audio, and counting it fed
+                // back into the latency (it ran away twice).
+                val deviceNs = if (pipelineNs >= 0) pipelineNs else DEFAULT_DEVICE_LATENCY_NS
+                val needNs = (arrivalNs - ptsNs) + deviceNs + startBufferNs
+                stats.need(arrivalNs - ptsNs, deviceNs, startBufferNs, needNs)
                 sync.reportAudio(needNs)
                 val error = heardAtNs - (ptsNs + sync.latencyNs) // > 0: late, < 0: early
                 stats.error(error)
@@ -147,7 +144,6 @@ class AudioPlayer(private val sync: AvSync) {
                         val silence = ((-error) * SAMPLE_RATE / 1_000_000_000L).toInt()
                             .coerceAtMost(SAMPLE_RATE) // at most 1 s per packet
                         if (!writeSilence(t, silence)) return
-                        pendingSilence.addLast(longArrayOf(framesWritten, silence.toLong()))
                         stats.silenceFrames += silence
                     }
                 }
@@ -169,27 +165,12 @@ class AudioPlayer(private val sync: AvSync) {
 
     private fun queuedFrames(t: AudioTrack) = framesWritten - t.playbackHeadPosition.toLong()
 
-    /**
-     * Inserted silence not yet heard. Measured against what has been heard (the track's
-     * timestamp), not the playback head: the Streamer's HDMI path pulls audio from the
-     * track well before it plays, so head-based accounting called silence "done" early.
-     */
-    private fun pendingSilenceNs(t: AudioTrack): Long {
-        val head = if (presentedFrames >= 0) presentedFrames else t.playbackHeadPosition.toLong()
-        while (pendingSilence.isNotEmpty() && pendingSilence.first()[0] <= head) pendingSilence.removeFirst()
-        var frames = 0L
-        for (entry in pendingSilence) frames += minOf(entry[1], entry[0] - head)
-        return frames * 1_000_000_000L / SAMPLE_RATE
-    }
-
     private fun resetTrack(t: AudioTrack) {
         t.pause()
         t.flush()
         t.play()
         framesWritten = 0
-        pendingSilence.clear()
-        presentedFrames = -1
-    }
+            }
 
     /**
      * When the next frame written now would be heard, from the track's latest
@@ -203,12 +184,10 @@ class AudioPlayer(private val sync: AvSync) {
             // A new track takes ~1 s to report timestamps. Estimate meanwhile from what's
             // queued plus the device latency, instead of writing without timing (which
             // overfills the queue and forces a resync once timestamps arrive).
-            presentedFrames = -1
             return now + queuedNs + (if (pipelineNs >= 0) pipelineNs else DEFAULT_DEVICE_LATENCY_NS)
         }
         val framesAhead = framesWritten - timestamp.framePosition
         val heardAt = timestamp.nanoTime + framesAhead * 1_000_000_000L / SAMPLE_RATE
-        presentedFrames = timestamp.framePosition + (now - timestamp.nanoTime) * SAMPLE_RATE / 1_000_000_000L
         val deviceNs = (heardAt - now - queuedNs).coerceAtLeast(0)
         if (pipelineNs < 0) {
             pipelineNs = deviceNs
@@ -241,9 +220,7 @@ class AudioPlayer(private val sync: AvSync) {
         // doesn't add latency: what's actually queued does.
         val bufferBytes = maxOf(minBuffer * 2, SAMPLE_RATE * BYTES_PER_FRAME * 3)
         framesWritten = 0
-        pendingSilence.clear()
-        presentedFrames = -1
-        return AudioTrack.Builder()
+                return AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -269,6 +246,7 @@ class AudioPlayer(private val sync: AvSync) {
                 if (Build.VERSION.SDK_INT >= 31) {
                     val frames = if (lowLatency) SAMPLE_RATE / 25 else minBuffer / BYTES_PER_FRAME
                     it.setStartThresholdInFrames(frames)
+                    startBufferNs = frames * 1_000_000_000L / SAMPLE_RATE
                 }
                 it.setVolume(gain)
                 it.play()
@@ -392,7 +370,7 @@ class AudioPlayer(private val sync: AvSync) {
                 t?.playState ?: -1, queued.get()))
             if (needCount > 0) {
                 val n = needCount
-                Log.i(TAG, "need avg %d ms = arrival-pts %d + heard-now %d - pending silence %d; decoder pts skew %s".format(
+                Log.i(TAG, "need avg %d ms = arrival-pts %d + device %d + start buffer %d; decoder pts skew %s".format(
                     needSum / n / AvSync.MS, lateSum / n / AvSync.MS, aheadSum / n / AvSync.MS, pendingSum / n / AvSync.MS,
                     if (skewCount > 0) "${skewSumUs / skewCount / 1000} ms" else "-"))
             }
