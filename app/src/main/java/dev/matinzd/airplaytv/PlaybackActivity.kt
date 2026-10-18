@@ -98,13 +98,15 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
 
     private fun render(state: AirPlaySession.State) {
         val showVideo = state.showsVideo && state.videoWidth > 0
+        val sessionOver = sawSession && !state.active
         videoFrame.visibility = if (state.showsVideo) View.VISIBLE else View.INVISIBLE
         if (state.videoWidth > 0 && state.videoHeight > 0) {
             videoFrame.aspectRatio = state.videoWidth.toFloat() / state.videoHeight
         }
-        infoPanel.visibility = if (showVideo) View.GONE else View.VISIBLE
+        // After the session ends, stay black while closing instead of "Connecting…".
+        infoPanel.visibility = if (showVideo || sessionOver) View.GONE else View.VISIBLE
 
-        val client = state.clientName ?: "iPhone"
+        val client = state.clientName ?: "your device"
         when {
             state.audioOnly -> {
                 if (state.coverArt != null) cover.setImageBitmap(state.coverArt) else cover.setImageResource(R.drawable.ic_airplay)
@@ -118,7 +120,8 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
             }
         }
 
-        // Close when the session is over (with a short grace period for reconnects).
+        // Close when the session is over. The short grace period covers handovers,
+        // e.g. mirroring -> YouTube video, without flashing the launcher.
         if (state.active) sawSession = true
         handler.removeCallbacks(finishRunnable)
         if (!state.active) handler.postDelayed(finishRunnable, if (sawSession) 1_500L else 15_000L)

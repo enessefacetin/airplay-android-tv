@@ -205,7 +205,11 @@ class AirPlayService : Service(), AirPlayNative.Listener {
                 hls.stop()
                 AirPlaySession.update { endVideo(it.copy(mirroring = false, hlsVideo = false)) }
             }
-            else -> { // mirroring stopped (possibly handing over to AirPlay video)
+            AirPlayNative.RESET_RTP_TO_HLS_TEARDOWN -> { // mirroring hands over to AirPlay video
+                video.reset()
+                AirPlaySession.update { it.copy(mirroring = false) }
+            }
+            else -> { // mirroring stopped
                 video.reset()
                 AirPlaySession.update { endVideo(it.copy(mirroring = false)) }
             }
