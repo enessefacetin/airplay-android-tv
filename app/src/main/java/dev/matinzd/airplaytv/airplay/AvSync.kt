@@ -11,9 +11,8 @@ import android.util.Log
  * `timestamp + latency`, with the latency set by the slower stream plus a margin.
  *
  * Raised at once when a stream needs more; lowered slowly when it needs less, except
- * for AirPlay music, where a steady latency matters more than a low one.
- * Never negative: for AirPlay music (packets arrive ~2 s early) it is 0, so audio
- * plays exactly when the sender intends.
+ * for AirPlay music, where a steady latency matters more than a low one. While
+ * mirroring it can go negative (the anchor packet arrived late).
  */
 class AvSync {
     @Volatile
@@ -56,7 +55,9 @@ class AvSync {
         // wider margin, start near where it settles (~0.7 s here) and never lower it, so
         // it doesn't move up and down (each move is a gap or a drop you can hear).
         val margin = if (audioOnly) AUDIO_ONLY_MARGIN_NS else MARGIN_NS
-        var target = (needed + margin).coerceIn(0, MAX_LATENCY_NS)
+        // Negative is fine while mirroring: the clock is anchored on the first packet's
+        // arrival, and if that packet was late, everything after looks early.
+        var target = (needed + margin).coerceIn(if (audioOnly) 0 else -MAX_LATENCY_NS, MAX_LATENCY_NS)
         if (audioOnly) target = maxOf(target, AUDIO_ONLY_START_NS)
         val current = latencyNs
         if (target > current) {
