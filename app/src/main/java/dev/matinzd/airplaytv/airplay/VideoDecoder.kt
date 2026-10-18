@@ -48,6 +48,8 @@ class VideoDecoder(
     private val inFlight = LinkedHashMap<Long, LongArray>()
     @Volatile
     private var decodeLeadNs = 30 * AvSync.MS
+    @Volatile
+    private var codecStartedAtNs = 0L
     private var feedScheduledAtNs = 0L
     private val feedTask = Runnable {
         synchronized(lock) {
@@ -200,6 +202,7 @@ class VideoDecoder(
             c.configure(format, s, null, 0)
             c.start()
             codec = c
+            codecStartedAtNs = System.nanoTime()
             freeInputs.clear()
             pending.clear()
             pending.addAll(gop)
@@ -308,9 +311,12 @@ class VideoDecoder(
                     // Track a high-water mark of decode time: decode that much ahead of the slot.
                     decodeLeadNs = if (decodeNs > decodeLeadNs) decodeNs
                     else decodeLeadNs - (decodeLeadNs - decodeNs) / 32
-                    // What this stream needs: how late it arrived, plus decoding.
+                    // What this stream needs: how late it arrived, plus decoding. Skip the
+                    // first second after the decoder starts: those are frames cached while
+                    // the playback screen was coming up (or a backlog behind them), late by
+                    // design rather than because of the network.
                     val requiredNs = times[0] - ptsNs + decodeNs
-                    sync.reportVideo(requiredNs)
+                    if (now - codecStartedAtNs > STARTUP_GRACE_NS) sync.reportVideo(requiredNs)
                     val target = ptsNs + sync.latencyNs
                     if (target - now in MIN_SCHEDULE_NS..MAX_SCHEDULE_NS) renderAtNs = target
                     stats.rendered(requiredNs, if (renderAtNs != 0L) renderAtNs - now else 0L)
@@ -382,6 +388,7 @@ class VideoDecoder(
         const val TAG = "VideoDecoder"
         const val MAX_GOP_BYTES = 48L * 1024 * 1024
         const val START_RETRY_DELAY_NS = 250_000_000L
+        const val STARTUP_GRACE_NS = 1_000_000_000L
         const val MIN_SCHEDULE_NS = 2_000_000L     // closer than this: just render now
         const val MAX_SCHEDULE_NS = 500_000_000L   // further than this: timestamps are off, render now
     }
