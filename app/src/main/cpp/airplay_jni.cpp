@@ -75,7 +75,7 @@ struct {
     jmethodID onAudioFormat, onAudioPcm, onAudioAac, onAudioFlush;
     jmethodID onVolume, onCoverArt, onMetadata;
     jmethodID onVideoPlay, onVideoScrub, onVideoRate, onVideoStop, onVideoPlaylistRemove, onVideoPlaybackInfo;
-    jmethodID onDisplayPin, onRegisterClient, isClientRegistered;
+    jmethodID onDisplayPin, onRegisterClient, isClientRegistered, onRemoteControl;
 } m;
 
 /* raop keeps these pointers, so they must outlive the server. */
@@ -472,7 +472,17 @@ void cb_display_pin(void *, char *pin) {
     check_exception(env);
     if (jp) env->DeleteLocalRef(jp);
 }
-void cb_export_dacp(void *, const char *, const char *) {}
+/* The sender's remote-control (DACP) ID: lets the TV remote pause and skip tracks. */
+void cb_export_dacp(void *, const char *active_remote, const char *dacp_id) {
+    if (!g_listener || !active_remote || !dacp_id) return;
+    JNIEnv *env = get_env();
+    if (!env) return;
+    jstring jd = env->NewStringUTF(dacp_id), ja = env->NewStringUTF(active_remote);
+    env->CallVoidMethod(g_listener, m.onRemoteControl, jd, ja);
+    check_exception(env);
+    env->DeleteLocalRef(jd);
+    env->DeleteLocalRef(ja);
+}
 void cb_mirror_video_running(void *, bool) {}
 void cb_video_report_size(void *, float *, float *, float *, float *) {}
 void cb_audio_remote_control_id(void *, const char *, const char *) {}
@@ -598,6 +608,7 @@ jint native_start(JNIEnv *env, jclass, jobject listener, jstring jname, jbyteArr
     m.onRegisterClient = env->GetMethodID(cls, "onRegisterClient",
             "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
     m.isClientRegistered = env->GetMethodID(cls, "isClientRegistered", "(Ljava/lang/String;)Z");
+    m.onRemoteControl = env->GetMethodID(cls, "onRemoteControl", "(Ljava/lang/String;Ljava/lang/String;)V");
     env->DeleteLocalRef(cls);
     if (env->ExceptionCheck()) {  // a listener method is missing
         env->ExceptionDescribe();

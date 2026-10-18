@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
 import android.view.Surface
+import dev.matinzd.airplaytv.airplay.RemoteControl
 import java.util.concurrent.CopyOnWriteArraySet
 
 /** Shared state between the receiver service and the screens. */
@@ -46,6 +47,14 @@ object AirPlaySession {
     /** Set by the service while it runs; the playback screen hands it its Surface. */
     @Volatile
     var surfaceSink: ((Surface?) -> Unit)? = null
+
+    /** Set by the service: send a play/pause or track command to the sender. */
+    @Volatile
+    var remoteCommand: ((RemoteControl.Command) -> Unit)? = null
+
+    /** Set by the service: disconnect the sender (the TV remote's Back button). */
+    @Volatile
+    var stopSession: (() -> Unit)? = null
 
     private val main = Handler(Looper.getMainLooper())
     private val observers = CopyOnWriteArraySet<(State) -> Unit>()

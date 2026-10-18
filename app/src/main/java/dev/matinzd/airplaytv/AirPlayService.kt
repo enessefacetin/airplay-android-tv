@@ -27,6 +27,7 @@ import dev.matinzd.airplaytv.airplay.Diagnostics
 import dev.matinzd.airplaytv.airplay.Dmap
 import dev.matinzd.airplaytv.airplay.HlsPlayer
 import dev.matinzd.airplaytv.airplay.MdnsAdvertiser
+import dev.matinzd.airplaytv.airplay.RemoteControl
 import dev.matinzd.airplaytv.airplay.VideoDecoder
 import java.io.File
 import java.security.SecureRandom
@@ -53,6 +54,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         AirPlaySession.update { it.copy(videoWidth = width, videoHeight = height) }
     }
     private lateinit var hls: HlsPlayer
+    private lateinit var remote: RemoteControl
 
     /** Turning the TV off ends the AirPlay session, like it does on an Apple TV. */
     private val screenOffReceiver = object : BroadcastReceiver() {
@@ -85,6 +87,9 @@ class AirPlayService : Service(), AirPlayNative.Listener {
             onEnded = { AirPlaySession.update { it.copy(hlsVideo = false) } },
         )
         // Mirroring and AirPlay video never run at the same time; both draw on the playback screen.
+        remote = RemoteControl(this)
+        AirPlaySession.remoteCommand = { remote.send(it) }
+        AirPlaySession.stopSession = { worker.execute { AirPlayNative.nativeDisconnect() } }
         AirPlaySession.surfaceSink = { surface ->
             video.setSurface(surface)
             hls.setSurface(surface)
@@ -121,6 +126,9 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         }
         worker.shutdown()
         AirPlaySession.surfaceSink = null
+        AirPlaySession.remoteCommand = null
+        AirPlaySession.stopSession = null
+        remote.clear()
         video.release()
         hls.stop()
         audio.release()
@@ -207,6 +215,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
     override fun onConnectionCount(count: Int) {
         AirPlaySession.update { if (count == 0) it.endSession().copy(connections = 0) else it.copy(connections = count) }
         if (count == 0) {
+            remote.clear()
             sync.reset()
             audio.stop()
             video.reset()
@@ -333,6 +342,8 @@ class AirPlayService : Service(), AirPlayNative.Listener {
     }
 
     override fun isClientRegistered(publicKey: String) = settings.isRemembered(publicKey)
+
+    override fun onRemoteControl(dacpId: String, activeRemote: String) = remote.setSender(dacpId, activeRemote)
 
     companion object {
         private const val TAG = "AirPlayService"

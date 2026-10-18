@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import android.text.TextUtils
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -22,6 +23,8 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import dev.matinzd.airplaytv.TvUi.dp
+import dev.matinzd.airplaytv.airplay.RemoteControl
+import kotlin.random.Random
 
 /**
  * Full-screen AirPlay output: the mirrored screen or AirPlay video, "now playing"
@@ -44,6 +47,8 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var trackArtist: TextView
     private lateinit var trackAlbum: TextView
     private lateinit var trackSource: TextView
+    private lateinit var musicContent: View
+    private var shownTitle: String? = null
 
     private val handler = Handler(Looper.getMainLooper())
     private val finishRunnable = Runnable { finish() }
@@ -150,8 +155,13 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
             addView(trackTitle, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(this@PlaybackActivity, 16) })
             addView(trackArtist, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(this@PlaybackActivity, 12) })
             addView(trackAlbum, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(this@PlaybackActivity, 6) })
+            addView(TvUi.text(this@PlaybackActivity, 16f, TvUi.TEXT_DIM).apply {
+                text = "OK  play/pause     ◀ ▶  previous/next     Back  stop"
+                alpha = 0.7f
+            }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(this@PlaybackActivity, 40) })
         }
         val content = LinearLayout(this).apply {
+            musicContent = this
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(this@PlaybackActivity, 96), dp(this@PlaybackActivity, 48), dp(this@PlaybackActivity, 96), dp(this@PlaybackActivity, 48))
@@ -171,11 +181,15 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
     override fun onStart() {
         super.onStart()
         AirPlaySession.observe(observer)
+        handler.postDelayed(drift, DRIFT_MS)
+        onActivity()
     }
 
     override fun onStop() {
         AirPlaySession.removeObserver(observer)
         handler.removeCallbacks(finishRunnable)
+        handler.removeCallbacks(drift)
+        handler.removeCallbacks(dim)
         super.onStop()
     }
 
@@ -212,6 +226,10 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
                 val pad = dp(this, 72)
                 cover.setPadding(pad, pad, pad, pad)
             }
+            if (state.title != shownTitle) {
+                shownTitle = state.title
+                onActivity()
+            }
             trackSource.text = "AirPlay from $client"
             trackTitle.text = state.title ?: "Playing audio"
             trackArtist.text = state.artist ?: ""
@@ -226,6 +244,56 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         if (!state.active) handler.postDelayed(finishRunnable, if (sawSession) 1_500L else 15_000L)
     }
 
+    // ---- TV remote ----
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        onActivity()
+        val music = musicPanel.visibility == View.VISIBLE
+        val command = when (keyCode) {
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_HEADSETHOOK -> RemoteControl.Command.PLAY_PAUSE
+            KeyEvent.KEYCODE_MEDIA_PLAY -> RemoteControl.Command.PLAY
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> RemoteControl.Command.PAUSE
+            KeyEvent.KEYCODE_MEDIA_NEXT -> RemoteControl.Command.NEXT
+            KeyEvent.KEYCODE_MEDIA_PREVIOUS -> RemoteControl.Command.PREVIOUS
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> if (music) RemoteControl.Command.PLAY_PAUSE else null
+            KeyEvent.KEYCODE_DPAD_RIGHT -> if (music) RemoteControl.Command.NEXT else null
+            KeyEvent.KEYCODE_DPAD_LEFT -> if (music) RemoteControl.Command.PREVIOUS else null
+            else -> null
+        }
+        if (command != null) {
+            AirPlaySession.remoteCommand?.invoke(command)
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    /** Back stops AirPlay, as on an Apple TV. Home leaves it running. */
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (AirPlaySession.state.active) AirPlaySession.stopSession?.invoke()
+        finish()
+    }
+
+    // ---- Burn-in protection (OLED): the music screen is static for a long time ----
+
+    private val drift = object : Runnable {
+        override fun run() {
+            val x = Random.nextInt(-dp(this@PlaybackActivity, 48), dp(this@PlaybackActivity, 48))
+            val y = Random.nextInt(-dp(this@PlaybackActivity, 32), dp(this@PlaybackActivity, 32))
+            musicContent.animate().translationX(x.toFloat()).translationY(y.toFloat()).setDuration(4_000).start()
+            handler.postDelayed(this, DRIFT_MS)
+        }
+    }
+
+    private val dim = Runnable { musicPanel.animate().alpha(DIM_ALPHA).setDuration(3_000).start() }
+
+    /** A key press or a new track: full brightness, dim again after a while. */
+    private fun onActivity() {
+        handler.removeCallbacks(dim)
+        musicPanel.animate().alpha(1f).setDuration(300).start()
+        handler.postDelayed(dim, DIM_AFTER_MS)
+    }
+
     override fun surfaceCreated(holder: SurfaceHolder) {
         AirPlaySession.surfaceSink?.invoke(holder.surface)
     }
@@ -234,5 +302,11 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         AirPlaySession.surfaceSink?.invoke(null)
+    }
+
+    private companion object {
+        const val DRIFT_MS = 60_000L
+        const val DIM_AFTER_MS = 5 * 60_000L
+        const val DIM_ALPHA = 0.35f
     }
 }

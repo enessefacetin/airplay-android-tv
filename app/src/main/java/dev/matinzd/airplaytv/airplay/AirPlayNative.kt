@@ -73,6 +73,9 @@ object AirPlayNative {
         fun onRegisterClient(deviceId: String?, publicKey: String?, name: String?)
         /** A returning device: did it pair with us before? */
         fun isClientRegistered(publicKey: String): Boolean
+
+        /** The sender accepts remote-control commands (DACP) with these IDs. */
+        fun onRemoteControl(dacpId: String, activeRemote: String)
     }
 
     @JvmStatic
