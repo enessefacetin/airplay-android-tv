@@ -23,7 +23,9 @@ class AvSync {
     @Volatile
     var audioOnly = false
 
-    private val video = Window()
+    // A single late video frame (a Wi-Fi hiccup) just shows late; only repeated
+    // lateness should hold every later frame back, so video ignores its top sample.
+    private val video = Window(ignoreTopSample = true)
     private val audio = Window()
     private var lastDecreaseNs = 0L
     private var lastLogNs = 0L
@@ -74,29 +76,42 @@ class AvSync {
         }
     }
 
-    /** Max over the last 1-2 s; inactive after 2 s without samples. */
-    private class Window {
-        private var current = NONE
-        private var previous = NONE
+    /**
+     * Max over the last 1-2 s (or the second-highest value, with [ignoreTopSample]);
+     * inactive after 2 s without samples.
+     */
+    private class Window(private val ignoreTopSample: Boolean = false) {
+        private var current = Bucket()
+        private var previous = Bucket()
         private var startNs = 0L
         private var lastSampleNs = 0L
+
+        private class Bucket {
+            var top = NONE
+            var second = NONE
+            fun value(skipTop: Boolean) = if (skipTop) second else top
+            fun add(value: Long) {
+                if (value > top) { second = top; top = value } else if (value > second) second = value
+            }
+        }
 
         fun add(value: Long, now: Long) {
             if (now - startNs > 1_000_000_000L) {
                 previous = current
-                current = NONE
+                current = Bucket()
                 startNs = now
             }
-            if (value > current) current = value
+            current.add(value)
             lastSampleNs = now
         }
 
-        fun max(now: Long) = if (now - lastSampleNs > 2_000_000_000L) NONE else maxOf(current, previous)
+        fun max(now: Long) = if (now - lastSampleNs > 2_000_000_000L) NONE
+        else maxOf(current.value(ignoreTopSample), previous.value(ignoreTopSample))
 
         fun describe(now: Long) = max(now).let { if (it == NONE) "-" else "${it / MS} ms" }
 
         fun reset() {
-            current = NONE; previous = NONE; startNs = 0; lastSampleNs = 0
+            current = Bucket(); previous = Bucket(); startNs = 0; lastSampleNs = 0
         }
 
         companion object {
