@@ -60,9 +60,15 @@ class AudioPlayer(private val sync: AvSync) {
     }
 
     /** [ptsNs]: sender timestamp on the System.nanoTime() clock, or 0 if unknown. */
-    fun playPcm(data: ByteArray, ptsNs: Long) = postData { writeSynced(data, 0, data.size, ptsNs) }
+    fun playPcm(data: ByteArray, ptsNs: Long) {
+        val arrivalNs = System.nanoTime()
+        postData { writeSynced(data, 0, data.size, ptsNs, arrivalNs) }
+    }
 
-    fun playAac(data: ByteArray, ptsNs: Long) = postData { decodeAac(data, ptsNs) }
+    fun playAac(data: ByteArray, ptsNs: Long) {
+        val arrivalNs = System.nanoTime()
+        postData { decodeAac(data, ptsNs, arrivalNs) }
+    }
 
     fun flush() = post {
         track?.apply { pause(); flush(); play() }
@@ -98,7 +104,7 @@ class AudioPlayer(private val sync: AvSync) {
         }
     }
 
-    private fun writeSynced(pcm: ByteArray, offset: Int, length: Int, ptsNs: Long) {
+    private fun writeSynced(pcm: ByteArray, offset: Int, length: Int, ptsNs: Long, arrivalNs: Long) {
         val t = track ?: return
         val frames = length / BYTES_PER_FRAME
         if (ptsNs > 0) {
@@ -106,10 +112,10 @@ class AudioPlayer(private val sync: AvSync) {
             if (!t.getTimestamp(timestamp)) stats.noTimestamp++
             val heardAtNs = nextFrameHeardAtNs(t, now)
             if (heardAtNs != null) {
-                // What audio needs: when it would be heard if nothing were done, i.e. arrival
-                // lateness + the track's natural buffering + device latency, but not the
-                // silence we inserted on purpose (counting that would feed back on itself).
-                sync.reportAudio(heardAtNs - ptsNs - pendingSilenceNs(t))
+                // What audio needs: how late it arrived + the track's natural buffering +
+                // device latency. Not the silence we inserted on purpose, and not time spent
+                // in our own queue (counting either would feed back on itself).
+                sync.reportAudio((arrivalNs - ptsNs) + (heardAtNs - now) - pendingSilenceNs(t))
                 val error = heardAtNs - (ptsNs + sync.latencyNs) // > 0: late, < 0: early
                 stats.error(error)
                 when {
@@ -215,10 +221,10 @@ class AudioPlayer(private val sync: AvSync) {
         val minBuffer = AudioTrack.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT,
         )
-        // Room to hold audio until its presentation time: up to the sync latency while
-        // mirroring, about 2 s for AirPlay music.
-        val bufferBytes = if (lowLatency) maxOf(minBuffer * 2, SAMPLE_RATE * BYTES_PER_FRAME / 2)
-        else SAMPLE_RATE * BYTES_PER_FRAME * 3
+        // Room to hold audio until its presentation time without ever blocking the audio
+        // thread (a blocked thread made packets queue up and look late). The buffer size
+        // doesn't add latency: what's actually queued does.
+        val bufferBytes = maxOf(minBuffer * 2, SAMPLE_RATE * BYTES_PER_FRAME * 3)
         framesWritten = 0
         pendingSilence.clear()
         return AudioTrack.Builder()
@@ -282,7 +288,7 @@ class AudioPlayer(private val sync: AvSync) {
         return null
     }
 
-    private fun decodeAac(data: ByteArray, ptsNs: Long) {
+    private fun decodeAac(data: ByteArray, ptsNs: Long, arrivalNs: Long) {
         val codec = aac ?: return
         try {
             val inIndex = codec.dequeueInputBuffer(10_000)
@@ -302,7 +308,7 @@ class AudioPlayer(private val sync: AvSync) {
                     if (pcmScratch.size < info.size) pcmScratch = ByteArray(info.size)
                     out.position(info.offset)
                     out.get(pcmScratch, 0, info.size)
-                    writeSynced(pcmScratch, 0, info.size, if (ptsNs > 0) info.presentationTimeUs * 1000 else 0)
+                    writeSynced(pcmScratch, 0, info.size, if (ptsNs > 0) info.presentationTimeUs * 1000 else 0, arrivalNs)
                 }
                 codec.releaseOutputBuffer(outIndex, false)
             }
