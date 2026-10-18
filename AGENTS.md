@@ -124,6 +124,7 @@ builds don't.
 - Pausing AirPlay music sends no message; packets just stop (pause = 1.2 s gap).
   Pausing also ends the audio stream, which clears the cover art in UxPlay.
 - The iPhone doesn't notice a dropped music connection; Back pauses instead.
+- The DACP-ID header has no leading zeros; the `iTunes_Ctrl_` service name has them.
 - UxPlay's random PIN is single-use; the shown PIN is held as a fixed PIN until paired.
 - The ALAC decoder needs `TARGET_RT_LITTLE_ENDIAN=1` on ARM.
 - macOS: use `sed -i ''`; in zsh, don't name a shell variable `path` (it is `$PATH`).

@@ -87,7 +87,7 @@ class RemoteControl(context: Context) {
         val listener = object : NsdManager.DiscoveryListener {
             override fun onServiceFound(info: NsdServiceInfo) {
                 val id = dacpId ?: return
-                if (!info.serviceName.equals("iTunes_Ctrl_$id", ignoreCase = true)) {
+                if (!isSenderService(info.serviceName, id)) {
                     Log.i(TAG, "ignoring ${info.serviceName} (want iTunes_Ctrl_$id)")
                     return
                 }
@@ -125,7 +125,17 @@ class RemoteControl(context: Context) {
         discovery = null
     }
 
-    private companion object {
-        const val TAG = "RemoteControl"
+    companion object {
+        private const val TAG = "RemoteControl"
+
+        /**
+         * The DACP-ID header is a 64-bit hex number without leading zeros
+         * ("ED089007A70EE1B"); the service name has all 16 digits ("iTunes_Ctrl_0ED0...").
+         */
+        fun isSenderService(serviceName: String, dacpId: String): Boolean {
+            val prefix = "iTunes_Ctrl_"
+            if (!serviceName.startsWith(prefix, ignoreCase = true)) return false
+            return serviceName.substring(prefix.length).trimStart('0').equals(dacpId.trimStart('0'), ignoreCase = true)
+        }
     }
 }
