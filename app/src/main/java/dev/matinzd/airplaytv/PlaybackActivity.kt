@@ -24,7 +24,7 @@ import android.widget.TextView
  */
 class PlaybackActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var videoFrame: AspectRatioFrameLayout
-    private lateinit var overlay: LinearLayout
+    private lateinit var infoPanel: LinearLayout
     private lateinit var cover: ImageView
     private lateinit var title: TextView
     private lateinit var subtitle: TextView
@@ -64,7 +64,7 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
             textSize = 20f
             gravity = Gravity.CENTER
         }
-        overlay = LinearLayout(this).apply {
+        infoPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             val size = (280 * density).toInt()
@@ -78,7 +78,7 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         setContentView(FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(videoFrame, AspectRatioFrameLayout.centered())
-            addView(overlay, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            addView(infoPanel, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         })
     }
 
@@ -99,7 +99,7 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         if (state.videoWidth > 0 && state.videoHeight > 0) {
             videoFrame.aspectRatio = state.videoWidth.toFloat() / state.videoHeight
         }
-        overlay.visibility = if (showVideo) View.GONE else View.VISIBLE
+        infoPanel.visibility = if (showVideo) View.GONE else View.VISIBLE
 
         val client = state.clientName ?: "iPhone"
         when {
