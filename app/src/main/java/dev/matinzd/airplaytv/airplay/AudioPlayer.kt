@@ -116,7 +116,7 @@ class AudioPlayer(private val sync: AvSync) {
                         resetTrack(t)
                         return
                     }
-                    error > MAX_LATE_NS -> {
+                    error > (if (lowLatencyTrack) MAX_LATE_NS else MAX_LATE_MUSIC_NS) -> {
                         stats.dropped++
                         return
                     }
@@ -342,6 +342,8 @@ class AudioPlayer(private val sync: AvSync) {
         // Audio up to 45 ms behind the picture isn't noticeable (ITU-R BT.1359);
         // the track's own buffering keeps it ~20 ms behind, so don't drop before that.
         private const val MAX_LATE_NS = 45 * AvSync.MS
+        // Music has no picture to stay in sync with; it sits ~40 ms behind its slot here.
+        private const val MAX_LATE_MUSIC_NS = 120 * AvSync.MS
         private const val RESYNC_LATE_NS = 150 * AvSync.MS
         private const val DEFAULT_DEVICE_LATENCY_NS = 200 * AvSync.MS // Streamer HDMI: ~210 ms
         private const val MAX_EARLY_NS = 15 * AvSync.MS
