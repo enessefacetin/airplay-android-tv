@@ -189,7 +189,7 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         progressFill = View(this).apply { background = TvUi.rounded(ctx, TvUi.TEXT, radiusDp = 3) }
         progressBar = FrameLayout(this).apply {
             background = TvUi.rounded(ctx, 0x40FFFFFF, radiusDp = 3)
-            addView(progressFill, FrameLayout.LayoutParams(0, MATCH_PARENT))
+            addView(progressFill, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         }
         elapsedText = TvUi.text(this, 18f, TvUi.TEXT_DIM)
         durationText = TvUi.text(this, 18f, TvUi.TEXT_DIM).apply { gravity = Gravity.END }
@@ -260,12 +260,12 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
     /** Playing/paused, position and the on-screen controls; also refreshed every half second. */
     private fun renderPlayback(state: AirPlaySession.State) {
         val playing = state.playing
-        statusIcon.setImageResource(if (playing) R.drawable.ic_play else R.drawable.ic_pause)
-        statusText.text = if (playing) "Playing" else "Paused"
+        statusIcon.setIconIfChanged(if (playing) R.drawable.ic_play else R.drawable.ic_pause)
+        statusText.setIfChanged(if (playing) "Playing" else "Paused")
         statusText.setTextColor(if (playing) TvUi.ACCENT else TvUi.TEXT_DIM)
         statusIcon.setColorFilter(if (playing) TvUi.ACCENT else TvUi.TEXT_DIM)
         pausedOverlay.visibility = if (playing) View.GONE else View.VISIBLE
-        playPauseButton.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
+        playPauseButton.setIconIfChanged(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
 
         val duration = state.durationSec
         val known = duration > 1
@@ -274,13 +274,11 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
         durationText.visibility = progressBar.visibility
         if (known) {
             val position = state.positionNow().coerceIn(0.0, duration)
-            val width = progressBar.width
-            if (width > 0) progressFill.layoutParams = progressFill.layoutParams.apply {
-                this.width = (width * position / duration).toInt()
-            }
-            progressFill.requestLayout()
-            elapsedText.text = formatTime(position)
-            durationText.text = formatTime(duration)
+            // Scale instead of resizing: no layout pass (which would restart the marquee).
+            progressFill.pivotX = 0f
+            progressFill.scaleX = (position / duration).toFloat()
+            elapsedText.setIfChanged(formatTime(position))
+            durationText.setIfChanged(formatTime(duration))
         }
         // Controls stay visible while paused, so it's clear how to resume; they fade
         // again a few seconds after playback resumes.
@@ -295,6 +293,18 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private var wasPlaying = true
+
+    /** Setting an image also lays the screen out again; skip it when nothing changed. */
+    private fun ImageView.setIconIfChanged(res: Int) {
+        if (tag != res) {
+            tag = res
+            setImageResource(res)
+        }
+    }
+
+    private fun TextView.setIfChanged(value: String) {
+        if (text.toString() != value) text = value
+    }
 
     private fun marquee(view: TextView) = view.apply {
         isSingleLine = true
@@ -384,10 +394,11 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
                 shownTitle = state.title
                 onActivity()
             }
-            trackSource.text = "·  from $client"
-            trackTitle.text = state.title ?: "Playing audio"
-            trackArtist.text = state.artist ?: ""
-            trackAlbum.text = state.album ?: ""
+            trackSource.setIfChanged("·  from $client")
+            // Setting text restarts a marquee, so only set it when it changes.
+            trackTitle.setIfChanged(state.title ?: "Playing audio")
+            trackArtist.setIfChanged(state.artist ?: "")
+            trackAlbum.setIfChanged(state.album ?: "")
             renderPlayback(state)
         }
         connectingTitle.text = "Connecting to $client…"
