@@ -1,0 +1,69 @@
+plugins {
+    id("com.android.application")
+}
+
+// The Streamer runs a 32-bit userspace (ro.product.cpu.abi = armeabi-v7a).
+val targetAbis = listOf("armeabi-v7a")
+
+android {
+    namespace = "dev.matinzd.airplaytv"
+    compileSdk = 36
+    ndkVersion = "29.0.13599879"
+
+    defaultConfig {
+        applicationId = "dev.matinzd.airplaytv"
+        minSdk = 28
+        targetSdk = 34
+        versionCode = 1
+        versionName = "0.1.0"
+        ndk { abiFilters += targetAbis }
+        externalNativeBuild {
+            cmake { arguments += listOf("-DANDROID_STL=c++_static") }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+val sdkComponents = androidComponents.sdkComponents
+
+// OpenSSL's libcrypto isn't part of the NDK: build it once, before CMake runs.
+val buildOpenSsl by tasks.registering(Exec::class) {
+    group = "airplay"
+    description = "Builds static libcrypto for ${targetAbis.joinToString()} into third_party/openssl"
+    val outputs = targetAbis.map { rootProject.file("third_party/openssl/$it/lib/libcrypto.a") }
+    onlyIf { outputs.any { !it.exists() } }
+    workingDir = rootDir
+    commandLine("bash", "scripts/build-openssl.sh")
+    environment("ABIS", targetAbis.joinToString(" "))
+    doFirst { environment("ANDROID_NDK_ROOT", sdkComponents.ndkDirectory.get().asFile.absolutePath) }
+}
+tasks.configureEach {
+    if (name.startsWith("configureCMake") || name.startsWith("buildCMake")) dependsOn(buildOpenSsl)
+}
+
+// One-time device setup over adb: lets the app wake the TV from standby.
+tasks.register<Exec>("setupDevice") {
+    group = "airplay"
+    description = "Grants the permissions the app needs to wake the TV (uses adb)"
+    workingDir = rootDir
+    commandLine("bash", "scripts/setup-device.sh")
+    doFirst { environment("ADB", sdkComponents.adb.get().asFile.absolutePath) }
+}
