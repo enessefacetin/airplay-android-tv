@@ -325,7 +325,9 @@ class AudioPlayer(private val sync: AvSync) {
         private const val SAMPLE_RATE = 44100
         private const val BYTES_PER_FRAME = 4
         private const val MAX_QUEUED = 400
-        private const val MAX_LATE_NS = 25 * AvSync.MS
+        // Audio up to 45 ms behind the picture isn't noticeable (ITU-R BT.1359);
+        // the track's own buffering keeps it ~20 ms behind, so don't drop before that.
+        private const val MAX_LATE_NS = 45 * AvSync.MS
         private const val RESYNC_LATE_NS = 150 * AvSync.MS
         private const val MAX_EARLY_NS = 15 * AvSync.MS
     }
