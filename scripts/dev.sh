@@ -18,7 +18,7 @@ mkdir -p build
 {
     "$ADB" connect "$ANDROID_SERIAL" || true
     ./gradlew :app:installDebug
-    ADB="$ADB" scripts/setup-device.sh
+    ADB="$ADB" bash scripts/setup-device.sh
     "$ADB" shell am start -n dev.matinzd.airplaytv/.MainActivity
 } 2>&1 | tee build/dev.log
 
