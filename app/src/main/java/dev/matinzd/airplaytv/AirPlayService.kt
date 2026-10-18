@@ -23,6 +23,7 @@ import android.util.Log
 import dev.matinzd.airplaytv.airplay.AirPlayNative
 import dev.matinzd.airplaytv.airplay.AudioPlayer
 import dev.matinzd.airplaytv.airplay.AvSync
+import dev.matinzd.airplaytv.airplay.Diagnostics
 import dev.matinzd.airplaytv.airplay.Dmap
 import dev.matinzd.airplaytv.airplay.HlsPlayer
 import dev.matinzd.airplaytv.airplay.MdnsAdvertiser
@@ -133,6 +134,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         val name = settings.name ?: deviceName()
         sync.decoupled = settings.lowLatency
         val debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        Diagnostics.enabled = debug
         val keyFile = File(filesDir, "airplay-key.pem").absolutePath
         val language = Locale.getDefault().toLanguageTag()
         val allow4k = settings.allow4k

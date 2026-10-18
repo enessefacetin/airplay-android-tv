@@ -373,7 +373,7 @@ class VideoDecoder(
             if (lateNs > lateMaxNs) lateMaxNs = lateNs
             holdSumNs += holdNs
             val elapsed = System.nanoTime() - windowStart
-            if (elapsed >= 5_000_000_000L) {
+            if (elapsed >= 5_000_000_000L && Diagnostics.enabled) {
                 val secs = elapsed / 1e9
                 Log.i(TAG, "in %.1f fps, out %.1f fps, needed avg %d / max %d ms, held avg %d ms, backlog max %d".format(
                     received / secs, rendered / secs, lateSumNs / rendered / 1_000_000, lateMaxNs / 1_000_000,

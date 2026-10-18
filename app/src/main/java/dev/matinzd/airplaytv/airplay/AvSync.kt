@@ -92,7 +92,7 @@ class AvSync {
             latencyNs = current - maxOf((current - target) / 4, minOf(current - target, STEP_DOWN_NS))
             lastDecreaseNs = now
         }
-        if (now - lastLogNs > 5_000_000_000L) {
+        if (Diagnostics.enabled && now - lastLogNs > 5_000_000_000L) {
             lastLogNs = now
             Log.i(TAG, "latency %d ms (video needs %s, audio needs %s)".format(
                 latencyNs / MS, video.describe(now), audio.describe(now)))

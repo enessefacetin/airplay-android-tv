@@ -125,7 +125,6 @@ constexpr int64_t kNoOffset = INT64_MIN;
 constexpr int64_t kPlausibleNs = 5000000000LL;  // AirPlay never schedules >5 s ahead/behind
 enum { STREAM_AUDIO = 0, STREAM_VIDEO = 1 };
 std::atomic<int64_t> g_offset[2] = {{kNoOffset}, {kNoOffset}};
-std::atomic<int64_t> g_last_diag_ns{0};
 
 void reset_presentation_clock() {
     g_offset[STREAM_AUDIO] = kNoOffset;
@@ -162,10 +161,6 @@ int64_t presentation_ns(uint64_t remote_ns, uint64_t local_realtime_ns, bool sen
         offset = now_mono - (int64_t) remote_ns;
         g_offset[stream] = offset;
         pts = (int64_t) remote_ns + offset;
-    }
-    if (now_mono - g_last_diag_ns > 5000000000LL) {
-        g_last_diag_ns = now_mono;
-        LOG_I("%s pts - now = %lld ms", what, (long long) ((pts - now_mono) / 1000000));
     }
     return pts > 0 ? pts : 0;
 }
