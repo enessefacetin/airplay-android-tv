@@ -97,8 +97,8 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun render(state: AirPlaySession.State) {
-        val showVideo = state.mirroring && state.videoWidth > 0
-        videoFrame.visibility = if (state.mirroring) View.VISIBLE else View.INVISIBLE
+        val showVideo = state.showsVideo && state.videoWidth > 0
+        videoFrame.visibility = if (state.showsVideo) View.VISIBLE else View.INVISIBLE
         if (state.videoWidth > 0 && state.videoHeight > 0) {
             videoFrame.aspectRatio = state.videoWidth.toFloat() / state.videoHeight
         }
@@ -125,12 +125,12 @@ class PlaybackActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
-        AirPlaySession.videoDecoder?.setSurface(holder.surface)
+        AirPlaySession.surfaceSink?.invoke(holder.surface)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        AirPlaySession.videoDecoder?.setSurface(null)
+        AirPlaySession.surfaceSink?.invoke(null)
     }
 }

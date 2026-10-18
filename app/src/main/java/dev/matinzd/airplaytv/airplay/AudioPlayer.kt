@@ -52,9 +52,8 @@ class AudioPlayer {
         aacPts = 0
     }
 
-    fun setVolumeDb(db: Float) = post {
-        // AirPlay sends -30..0 dB; -30 and below (and -144) mean mute.
-        gain = if (db <= -30f) 0f else 10f.pow(db / 20f)
+    fun setVolume(gain: Float) = post {
+        this.gain = gain
         track?.setVolume(gain)
     }
 
@@ -177,9 +176,12 @@ class AudioPlayer {
         aacPts = 0
     }
 
-    private companion object {
-        const val TAG = "AudioPlayer"
-        const val SAMPLE_RATE = 44100
-        const val MAX_QUEUED = 100
+    companion object {
+        /** AirPlay sends -30..0 dB; -30 and below (and -144) mean mute. */
+        fun airPlayGain(db: Float): Float = if (db <= -30f) 0f else 10f.pow(db / 20f)
+
+        private const val TAG = "AudioPlayer"
+        private const val SAMPLE_RATE = 44100
+        private const val MAX_QUEUED = 100
     }
 }

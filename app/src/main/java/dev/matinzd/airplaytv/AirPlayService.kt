@@ -21,10 +21,12 @@ import android.util.Log
 import dev.matinzd.airplaytv.airplay.AirPlayNative
 import dev.matinzd.airplaytv.airplay.AudioPlayer
 import dev.matinzd.airplaytv.airplay.Dmap
+import dev.matinzd.airplaytv.airplay.HlsPlayer
 import dev.matinzd.airplaytv.airplay.MdnsAdvertiser
 import dev.matinzd.airplaytv.airplay.VideoDecoder
 import java.io.File
 import java.security.SecureRandom
+import java.util.Locale
 import java.util.concurrent.Executors
 
 /**
@@ -43,6 +45,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
     private val video = VideoDecoder { width, height ->
         AirPlaySession.update { it.copy(videoWidth = width, videoHeight = height) }
     }
+    private lateinit var hls: HlsPlayer
 
     /** Turning the TV off ends the AirPlay session, like it does on an Apple TV. */
     private val screenOffReceiver = object : BroadcastReceiver() {
@@ -68,7 +71,16 @@ class AirPlayService : Service(), AirPlayNative.Listener {
             ?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "airplaytv:server")
             ?.apply { setReferenceCounted(false); acquire() }
 
-        AirPlaySession.videoDecoder = video
+        hls = HlsPlayer(
+            this,
+            onVideoSize = { width, height -> AirPlaySession.update { it.copy(videoWidth = width, videoHeight = height) } },
+            onEnded = { AirPlaySession.update { it.copy(hlsVideo = false) } },
+        )
+        // Mirroring and AirPlay video never run at the same time; both draw on the playback screen.
+        AirPlaySession.surfaceSink = { surface ->
+            video.setSurface(surface)
+            hls.setSurface(surface)
+        }
         advertiser = MdnsAdvertiser(this)
         registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
         worker.execute(::startServer)
@@ -83,8 +95,9 @@ class AirPlayService : Service(), AirPlayNative.Listener {
             AirPlayNative.nativeStop()
         }
         worker.shutdown()
-        AirPlaySession.videoDecoder = null
+        AirPlaySession.surfaceSink = null
         video.release()
+        hls.stop()
         audio.release()
         wifiLock?.release()
         cpuLock.release()
@@ -96,7 +109,8 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         val name = deviceName()
         val debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         val keyFile = File(filesDir, "airplay-key.pem").absolutePath
-        val rc = AirPlayNative.nativeStart(this, name, hardwareAddress(), keyFile, 1920, 1080, 60, debug)
+        val language = Locale.getDefault().toLanguageTag()
+        val rc = AirPlayNative.nativeStart(this, name, hardwareAddress(), keyFile, 1920, 1080, 60, language, debug)
         if (rc != 0) {
             Log.e(TAG, "AirPlay server failed to start: $rc")
             AirPlaySession.update { it.copy(serverRunning = false, error = "Server failed to start ($rc)") }
@@ -162,6 +176,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         if (count == 0) {
             audio.stop()
             video.reset()
+            hls.stop()
             TvWaker.cancelNotification(this)
         }
     }
@@ -176,18 +191,33 @@ class AirPlayService : Service(), AirPlayNative.Listener {
     }
 
     override fun onVideoReset(type: Int) {
-        video.reset()
-        AirPlaySession.update {
-            // Mirroring stopped: end the session unless audio-only AirPlay is still playing.
-            it.copy(mirroring = false, videoWidth = 0, videoHeight = 0, clientName = if (it.audioOnly) it.clientName else null)
+        when (type) {
+            AirPlayNative.RESET_HLS_SHUTDOWN, AirPlayNative.RESET_HLS_EOS -> {
+                hls.stop()
+                AirPlaySession.update { endVideo(it.copy(hlsVideo = false)) }
+            }
+            AirPlayNative.RESET_NOHOLD -> {
+                video.reset()
+                hls.stop()
+                AirPlaySession.update { endVideo(it.copy(mirroring = false, hlsVideo = false)) }
+            }
+            else -> { // mirroring stopped (possibly handing over to AirPlay video)
+                video.reset()
+                AirPlaySession.update { endVideo(it.copy(mirroring = false)) }
+            }
         }
     }
+
+    /** When no video is left, end the session unless audio-only AirPlay is still playing. */
+    private fun endVideo(state: AirPlaySession.State) =
+        if (state.showsVideo) state
+        else state.copy(videoWidth = 0, videoHeight = 0, clientName = if (state.audioOnly) state.clientName else null)
 
     override fun onVideoFlush() = Unit
 
     override fun onAudioFormat(ct: Int, samplesPerFrame: Int, usingScreen: Boolean, isMedia: Boolean) {
         audio.configure(ct, samplesPerFrame, lowLatency = usingScreen)
-        AirPlaySession.update { it.copy(audioOnly = !usingScreen && !it.mirroring) }
+        AirPlaySession.update { it.copy(audioOnly = !usingScreen && !it.showsVideo) }
     }
 
     override fun onAudioPcm(data: ByteArray) = audio.playPcm(data)
@@ -196,7 +226,11 @@ class AirPlayService : Service(), AirPlayNative.Listener {
 
     override fun onAudioFlush() = audio.flush()
 
-    override fun onVolume(db: Float) = audio.setVolumeDb(db)
+    override fun onVolume(db: Float) {
+        val gain = AudioPlayer.airPlayGain(db)
+        audio.setVolume(gain)
+        hls.setVolume(gain)
+    }
 
     override fun onCoverArt(jpeg: ByteArray?) {
         val bitmap = jpeg?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
@@ -207,6 +241,28 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         val track = dmap?.let(Dmap::parse) ?: return
         AirPlaySession.update { it.copy(title = track.title, artist = track.artist, album = track.album) }
     }
+
+    override fun onVideoPlay(url: String, startSec: Float) {
+        // AirPlay video doesn't go through RTSP SETUP, so wake the TV here too.
+        AirPlaySession.update {
+            it.copy(hlsVideo = true, mirroring = false, audioOnly = false, clientName = it.clientName ?: "iPhone")
+        }
+        TvWaker.wake(this)
+        hls.play(url, startSec)
+    }
+
+    override fun onVideoScrub(positionSec: Float) = hls.seek(positionSec)
+
+    override fun onVideoRate(rate: Float) = hls.setRate(rate)
+
+    override fun onVideoStop() {
+        hls.stop()
+        AirPlaySession.update { endVideo(it.copy(hlsVideo = false)) }
+    }
+
+    override fun onVideoPlaylistRemove(): Float = hls.pauseAndGetPosition()
+
+    override fun onVideoPlaybackInfo(): DoubleArray = hls.playbackInfo()
 
     companion object {
         private const val TAG = "AirPlayService"

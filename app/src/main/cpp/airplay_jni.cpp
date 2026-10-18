@@ -72,7 +72,12 @@ struct {
     jmethodID onVideoData, onVideoReset, onVideoFlush;
     jmethodID onAudioFormat, onAudioPcm, onAudioAac, onAudioFlush;
     jmethodID onVolume, onCoverArt, onMetadata;
+    jmethodID onVideoPlay, onVideoScrub, onVideoRate, onVideoStop, onVideoPlaylistRemove, onVideoPlaybackInfo;
 } m;
+
+/* raop keeps these pointers, so they must outlive the server. */
+std::string g_lang_system;
+const std::string g_empty;
 
 std::atomic<int> g_open_connections{0};
 std::atomic<int64_t> g_last_feedback_ms{0};
@@ -249,8 +254,22 @@ void cb_video_process(void *, raop_ntp_t *, video_decode_struct *data) {
 
 void cb_video_reset(void *, reset_type_t type) {
     LOG_I("video_reset type=%d", (int) type);
-    if (g_raop && (type == RESET_TYPE_NOHOLD || type == RESET_TYPE_RTP_SHUTDOWN)) {
-        raop_remove_known_connections(g_raop);  // only flags connections for removal
+    if (g_raop) {
+        switch (type) {
+        case RESET_TYPE_NOHOLD:            // a new client took over
+            raop_destroy_airplay_video(g_raop, -1);
+            raop_remove_known_connections(g_raop);  // only flags connections for removal
+            break;
+        case RESET_TYPE_RTP_SHUTDOWN:      // mirroring stopped
+            raop_remove_known_connections(g_raop);
+            break;
+        case RESET_TYPE_HLS_SHUTDOWN:      // AirPlay video stopped
+            raop_destroy_airplay_video(g_raop, -1);
+            raop_remove_hls_connections(g_raop);
+            break;
+        default:                           // HLS_EOS, RTP_TO_HLS_TEARDOWN: keep connections
+            break;
+        }
     }
     call_listener(m.onVideoReset, (jint) type);
 }
@@ -333,22 +352,68 @@ void cb_video_report_size(void *, float *, float *, float *, float *) {}
 void cb_audio_remote_control_id(void *, const char *, const char *) {}
 void cb_audio_set_progress(void *, uint32_t *, uint32_t *, uint32_t *) {}
 
-/* HLS video (YouTube-style "AirPlay video") isn't advertised, but UxPlay calls
-   some of these without null checks if a client tries it anyway. */
-void cb_on_video_play(void *, const char *, const float) {}
-void cb_on_video_scrub(void *, const float) {}
-void cb_on_video_rate(void *, const float) {}
-void cb_on_video_stop(void *) {}
-void cb_on_video_acquire_playback_info(void *, playback_info_t *) {}
-float cb_on_video_playlist_remove(void *) { return 0.0f; }
+/* ---- AirPlay video (HLS, e.g. YouTube's AirPlay button) ----
+   UxPlay fetches the playlists through the iPhone and serves them on
+   http://localhost:<port>/; Kotlin plays that URL with ExoPlayer. */
+void cb_on_video_play(void *, const char *location, const float start_position) {
+    LOG_I("on_video_play %s at %.1f s", location, start_position);
+    if (!g_listener) return;
+    JNIEnv *env = get_env();
+    if (!env) return;
+    jstring url = to_jstring(env, location);
+    env->CallVoidMethod(g_listener, m.onVideoPlay, url, (jfloat) start_position);
+    check_exception(env);
+    if (url) env->DeleteLocalRef(url);
+}
+
+void cb_on_video_scrub(void *, const float position) { call_listener(m.onVideoScrub, (jfloat) position); }
+void cb_on_video_rate(void *, const float rate) { call_listener(m.onVideoRate, (jfloat) rate); }
+void cb_on_video_stop(void *) { call_listener(m.onVideoStop); }
+
+/* Pause, and report where playback was (UxPlay stores it as the resume position). */
+float cb_on_video_playlist_remove(void *) {
+    if (!g_listener) return 0.0f;
+    JNIEnv *env = get_env();
+    if (!env) return 0.0f;
+    jfloat position = env->CallFloatMethod(g_listener, m.onVideoPlaylistRemove);
+    check_exception(env);
+    return position;
+}
+
+/* Polled by the iPhone (about once a second) to drive its progress bar. */
+void cb_on_video_acquire_playback_info(void *, playback_info_t *info) {
+    info->ready_to_play = true;
+    info->playback_likely_to_keep_up = true;
+    if (!g_listener) return;
+    JNIEnv *env = get_env();
+    if (!env) return;
+    // [duration, position, seekStart, seekDuration, rate, stillPlaying, bufferEmpty, bufferFull]
+    auto arr = (jdoubleArray) env->CallObjectMethod(g_listener, m.onVideoPlaybackInfo);
+    check_exception(env);
+    if (!arr) return;
+    jdouble v[8] = {0};
+    env->GetDoubleArrayRegion(arr, 0, 8, v);
+    env->DeleteLocalRef(arr);
+    info->duration = v[0];
+    info->position = v[1];
+    info->seek_start = v[2];
+    info->seek_duration = v[3];
+    info->rate = (float) v[4];
+    info->playback_buffer_empty = v[6] != 0;
+    info->playback_buffer_full = v[7] != 0;
+    if (v[5] == 0) {  // finished: tells the client the video is over
+        info->position = -1.0;
+        info->duration = -1.0;
+    }
+}
 
 /* ---- server lifecycle ----------------------------------------------------- */
 
 void set_features(dnssd_t *d) {
-    /* Same feature set as UxPlay's start_dnssd() defaults (no HLS, no H.265,
-       AirPlay 2 pairing rather than legacy pairing). */
-    static const int on_bits[] = {1, 2, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
-                                  20, 21, 22, 25, 28, 30};
+    /* UxPlay's start_dnssd() defaults with HLS on ("-hls"): no H.265, AirPlay 2
+       pairing rather than legacy pairing. */
+    static const int on_bits[] = {0 /* video */, 1, 2, 4 /* HLS */, 5, 6, 7, 9, 10, 11, 12, 13,
+                                  14, 15, 16, 17, 18, 19, 20, 21, 22, 25, 28, 30};
     for (int bit = 0; bit < 64; bit++) dnssd_set_airplay_features(d, bit, 0);
     for (int bit : on_bits) dnssd_set_airplay_features(d, bit, 1);
 }
@@ -372,7 +437,7 @@ void stop_watchdog() {
 /* ---- JNI entry points ------------------------------------------------------ */
 
 jint native_start(JNIEnv *env, jclass, jobject listener, jstring jname, jbyteArray jhw,
-                  jstring jkeyfile, jint width, jint height, jint fps, jboolean debug) {
+                  jstring jkeyfile, jint width, jint height, jint fps, jstring jlang, jboolean debug) {
     std::lock_guard<std::mutex> lock(g_server_mutex);
     if (g_raop) return 0;
 
@@ -393,6 +458,12 @@ jint native_start(JNIEnv *env, jclass, jobject listener, jstring jname, jbyteArr
     m.onVolume = env->GetMethodID(cls, "onVolume", "(F)V");
     m.onCoverArt = env->GetMethodID(cls, "onCoverArt", "([B)V");
     m.onMetadata = env->GetMethodID(cls, "onMetadata", "([B)V");
+    m.onVideoPlay = env->GetMethodID(cls, "onVideoPlay", "(Ljava/lang/String;F)V");
+    m.onVideoScrub = env->GetMethodID(cls, "onVideoScrub", "(F)V");
+    m.onVideoRate = env->GetMethodID(cls, "onVideoRate", "(F)V");
+    m.onVideoStop = env->GetMethodID(cls, "onVideoStop", "()V");
+    m.onVideoPlaylistRemove = env->GetMethodID(cls, "onVideoPlaylistRemove", "()F");
+    m.onVideoPlaybackInfo = env->GetMethodID(cls, "onVideoPlaybackInfo", "()[D");
     env->DeleteLocalRef(cls);
     if (env->ExceptionCheck()) {  // a listener method is missing
         env->ExceptionDescribe();
@@ -473,6 +544,14 @@ jint native_start(JNIEnv *env, jclass, jobject listener, jstring jname, jbyteArr
     raop_set_plist(g_raop, "height", height);
     raop_set_plist(g_raop, "refreshRate", fps);
     raop_set_plist(g_raop, "maxFPS", fps);
+    raop_set_plist(g_raop, "hls", 1);
+    {
+        // Preferred audio/subtitle language for HLS, e.g. "sv-SE".
+        const char *lang = env->GetStringUTFChars(jlang, nullptr);
+        g_lang_system = lang;
+        env->ReleaseStringUTFChars(jlang, lang);
+        raop_set_lang(g_raop, g_empty.c_str(), g_empty.c_str(), g_lang_system.c_str());
+    }
     raop_set_tcp_ports(g_raop, kTcpPorts);
     raop_set_udp_ports(g_raop, kUdpPorts);
     {
@@ -544,7 +623,7 @@ jbyteArray native_service_txt(JNIEnv *env, jclass, jint service) {
 
 const JNINativeMethod kMethods[] = {
     {"nativeStart",
-     "(Ldev/matinzd/airplaytv/airplay/AirPlayNative$Listener;Ljava/lang/String;[BLjava/lang/String;IIIZ)I",
+     "(Ldev/matinzd/airplaytv/airplay/AirPlayNative$Listener;Ljava/lang/String;[BLjava/lang/String;IIILjava/lang/String;Z)I",
      reinterpret_cast<void *>(native_start)},
     {"nativeStop", "()V", reinterpret_cast<void *>(native_stop)},
     {"nativeDisconnect", "()V", reinterpret_cast<void *>(native_disconnect)},

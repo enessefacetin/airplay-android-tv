@@ -3,7 +3,7 @@ package dev.matinzd.airplaytv
 import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
-import dev.matinzd.airplaytv.airplay.VideoDecoder
+import android.view.Surface
 import java.util.concurrent.CopyOnWriteArraySet
 
 /** Shared state between the receiver service and the screens. */
@@ -17,6 +17,7 @@ object AirPlaySession {
         val clientModel: String? = null,
         val connections: Int = 0,
         val mirroring: Boolean = false,
+        val hlsVideo: Boolean = false,
         val audioOnly: Boolean = false,
         val videoWidth: Int = 0,
         val videoHeight: Int = 0,
@@ -25,10 +26,11 @@ object AirPlaySession {
         val album: String? = null,
         val coverArt: Bitmap? = null,
     ) {
-        val active get() = connections > 0 && (mirroring || audioOnly || clientName != null)
+        val showsVideo get() = mirroring || hlsVideo
+        val active get() = connections > 0 && (mirroring || hlsVideo || audioOnly || clientName != null)
 
         fun endSession() = copy(
-            clientName = null, clientModel = null, mirroring = false, audioOnly = false,
+            clientName = null, clientModel = null, mirroring = false, hlsVideo = false, audioOnly = false,
             videoWidth = 0, videoHeight = 0, title = null, artist = null, album = null, coverArt = null,
         )
     }
@@ -39,7 +41,7 @@ object AirPlaySession {
 
     /** Set by the service while it runs; the playback screen hands it its Surface. */
     @Volatile
-    var videoDecoder: VideoDecoder? = null
+    var surfaceSink: ((Surface?) -> Unit)? = null
 
     private val main = Handler(Looper.getMainLooper())
     private val observers = CopyOnWriteArraySet<(State) -> Unit>()

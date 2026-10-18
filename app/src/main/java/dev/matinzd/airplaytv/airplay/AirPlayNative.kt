@@ -13,6 +13,9 @@ object AirPlayNative {
     // reset_type_t in raop.h
     const val RESET_NOHOLD = 0
     const val RESET_RTP_SHUTDOWN = 1
+    const val RESET_HLS_SHUTDOWN = 2
+    const val RESET_HLS_EOS = 3
+    const val RESET_RTP_TO_HLS_TEARDOWN = 5
 
     // Audio "ct" codes from the RTSP SETUP
     const val AUDIO_PCM = 1
@@ -46,6 +49,17 @@ object AirPlayNative {
         fun onVolume(db: Float)
         fun onCoverArt(jpeg: ByteArray?)
         fun onMetadata(dmap: ByteArray?)
+
+        // AirPlay video (HLS), e.g. YouTube's AirPlay button
+        fun onVideoPlay(url: String, startSec: Float)
+        fun onVideoScrub(positionSec: Float)
+        /** 1 = play, 0 = pause */
+        fun onVideoRate(rate: Float)
+        fun onVideoStop()
+        /** Pause and return the current position in seconds. */
+        fun onVideoPlaylistRemove(): Float
+        /** [duration, position, seekStart, seekDuration, rate, stillPlaying, bufferEmpty, bufferFull] */
+        fun onVideoPlaybackInfo(): DoubleArray
     }
 
     @JvmStatic
@@ -57,6 +71,8 @@ object AirPlayNative {
         width: Int,
         height: Int,
         fps: Int,
+        /** BCP-47 tag used to pick HLS audio/subtitle tracks, e.g. "sv-SE" */
+        language: String,
         debug: Boolean,
     ): Int
 

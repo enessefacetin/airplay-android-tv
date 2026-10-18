@@ -14,6 +14,9 @@ turns on the TV and switches to its input. Turning the TV off ends the session.
 - **Video:** H.264 to MediaCodec (`c2.mtk.avc.decoder.lowlatency` on the Streamer), rendered as soon
   as it's decoded. The playback screen asks the TV for low-latency game mode (ALLM).
 - **Audio:** AAC-ELD (mirroring) through MediaCodec, ALAC (music) decoded natively, both to AudioTrack.
+- **AirPlay video** (YouTube's AirPlay button, Safari video): UxPlay fetches the HLS playlists through
+  the iPhone and serves them on `http://localhost:7000/`; `HlsPlayer` plays that with Media3 ExoPlayer
+  and follows play/pause/seek/stop from the iPhone.
 - **Wake on AirPlay:** `AirPlayService` is a foreground service holding a partial wake lock. On RTSP
   SETUP it turns the screen on and opens `PlaybackActivity`.
 
@@ -32,8 +35,7 @@ notifications.
 
 ## Limitations
 
-- No FairPlay-protected video (Apple TV+, Netflix casting) and no "AirPlay video" (HLS) mode, so
-  apps like YouTube send audio only. Screen mirroring works everywhere.
+- No FairPlay-protected video (Apple TV+, Netflix casting). Screen mirroring works everywhere.
 - H.264 only (no HEVC), mirroring at up to 1080p60.
 - Audio and video are played as soon as they arrive, without NTP-based A/V sync.
 

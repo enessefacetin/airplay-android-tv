@@ -42,6 +42,12 @@ android {
     }
 }
 
+dependencies {
+    // AirPlay video (HLS) playback
+    implementation("androidx.media3:media3-exoplayer:1.8.0")
+    implementation("androidx.media3:media3-exoplayer-hls:1.8.0")
+}
+
 val sdkComponents = androidComponents.sdkComponents
 
 // OpenSSL's libcrypto isn't part of the NDK: build it once, before CMake runs.

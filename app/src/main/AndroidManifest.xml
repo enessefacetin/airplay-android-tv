@@ -22,7 +22,10 @@
         android:banner="@drawable/banner"
         android:icon="@drawable/ic_airplay"
         android:label="@string/app_name"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+        android:usesCleartextTraffic="true">
+        <!-- cleartext: AirPlay video is served from http://localhost by the receiver itself,
+             and Safari can hand over plain http:// video URLs -->
 
         <activity
             android:name=".MainActivity"
