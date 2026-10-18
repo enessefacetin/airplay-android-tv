@@ -3,6 +3,8 @@ package dev.matinzd.airplaytv.airplay
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 
 /**
@@ -13,9 +15,13 @@ import android.util.Log
 class MdnsAdvertiser(context: Context) {
     private val nsd = context.getSystemService(NsdManager::class.java)
     private val registrations = mutableListOf<NsdManager.RegistrationListener>()
+    private val main = Handler(Looper.getMainLooper())
+    @Volatile
+    private var active = false
 
     fun register() {
         unregister()
+        active = true
         register(AirPlayNative.SERVICE_RAOP, "_raop._tcp")
         register(AirPlayNative.SERVICE_AIRPLAY, "_airplay._tcp")
     }
@@ -35,18 +41,24 @@ class MdnsAdvertiser(context: Context) {
                 Log.i(TAG, "registered $type '${info.serviceName}' on port $port")
             }
             override fun onRegistrationFailed(info: NsdServiceInfo, error: Int) {
-                Log.e(TAG, "registration of $type failed: $error")
+                Log.e(TAG, "registration of $type failed: $error; retrying in 10 s")
+                synchronized(registrations) { registrations.remove(this) }
+                main.postDelayed({ if (active) register(service, type) }, 10_000)
             }
             override fun onServiceUnregistered(info: NsdServiceInfo) = Unit
             override fun onUnregistrationFailed(info: NsdServiceInfo, error: Int) = Unit
         }
+        synchronized(registrations) { registrations += listener }
         nsd.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener)
-        registrations += listener
     }
 
     fun unregister() {
-        registrations.forEach { runCatching { nsd.unregisterService(it) } }
-        registrations.clear()
+        active = false
+        main.removeCallbacksAndMessages(null)
+        synchronized(registrations) {
+            registrations.forEach { runCatching { nsd.unregisterService(it) } }
+            registrations.clear()
+        }
     }
 
     companion object {

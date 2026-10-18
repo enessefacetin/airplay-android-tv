@@ -84,6 +84,7 @@ class AirPlayService : Service(), AirPlayNative.Listener {
             hls.setSurface(surface)
         }
         advertiser = MdnsAdvertiser(this)
+        KeepAliveJob.schedule(this)
         registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
         worker.execute(::startServer)
     }
@@ -278,7 +279,13 @@ class AirPlayService : Service(), AirPlayNative.Listener {
         private const val NOTIFICATION_ID = 1
 
         fun start(context: Context) {
-            context.startForegroundService(Intent(context, AirPlayService::class.java))
+            try {
+                context.startForegroundService(Intent(context, AirPlayService::class.java))
+            } catch (e: IllegalStateException) {
+                // ForegroundServiceStartNotAllowedException: not allowed from the background
+                // right now (e.g. battery optimisation exemption missing). KeepAliveJob retries.
+                Log.w(TAG, "could not start the receiver: ${e.message}")
+            }
         }
     }
 }

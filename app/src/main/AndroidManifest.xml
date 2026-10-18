@@ -58,6 +58,11 @@
                 android:value="AirPlay receiver: keeps the network listener and mDNS advertisement alive so an iPhone can start AirPlay and wake the TV" />
         </service>
 
+        <service
+            android:name=".KeepAliveJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
         <receiver
             android:name=".BootReceiver"
             android:exported="true">
