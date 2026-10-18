@@ -108,8 +108,10 @@ class AudioPlayer(private val sync: AvSync) {
                 val error = heardAtNs - (ptsNs + sync.latencyNs) // > 0: late, < 0: early
                 stats.error(error)
                 when {
-                    error > RESYNC_LATE_NS -> {
-                        // Far behind (e.g. silence queued for a higher latency): start over.
+                    error > RESYNC_LATE_NS && queuedFrames(t) > SAMPLE_RATE / 20 -> {
+                        // Far behind with audio queued (e.g. for a higher latency): start over.
+                        // Once the queue is empty, further late packets are simply dropped,
+                        // so a backlog of stale packets doesn't trigger a resync each.
                         Log.i(TAG, "audio ${error / AvSync.MS} ms late, resyncing")
                         resetTrack(t)
                         return
@@ -140,6 +142,8 @@ class AudioPlayer(private val sync: AvSync) {
         track = createTrack(lowLatencyTrack)
         return false
     }
+
+    private fun queuedFrames(t: AudioTrack) = framesWritten - t.playbackHeadPosition.toLong()
 
     private fun resetTrack(t: AudioTrack) {
         t.pause()
