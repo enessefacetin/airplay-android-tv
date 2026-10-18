@@ -2,100 +2,77 @@ package dev.matinzd.airplaytv
 
 import android.app.Activity
 import android.app.AlertDialog
-import android.graphics.Color
-import android.graphics.Typeface
 import android.os.Bundle
 import android.view.Gravity
-import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.Switch
-import android.widget.TextView
+import dev.matinzd.airplaytv.TvUi.dp
 
 /** Receiver settings, navigable with the TV remote. Changes restart the receiver. */
 class SettingsActivity : Activity() {
     private lateinit var settings: ReceiverSettings
-    private lateinit var list: LinearLayout
+    private val refreshers = mutableListOf<() -> Unit>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = ReceiverSettings(this)
-        val pad = (48 * resources.displayMetrics.density).toInt()
-        list = LinearLayout(this).apply {
+
+        val list = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad, pad, pad)
+            setPadding(dp(this@SettingsActivity, 80), dp(this@SettingsActivity, 48), dp(this@SettingsActivity, 80), dp(this@SettingsActivity, 48))
         }
+        list.addView(TvUi.text(this, 36f, bold = true).apply { text = "Settings" })
+
+        val nameRow = row(list, "AirPlay name", "The name shown in the AirPlay list on your devices",
+            { settings.name ?: AirPlaySession.state.serverName }) { editName() }
+        row(list, "Require a code for new devices", "A new iPhone, iPad or Mac must enter a code shown on the TV once",
+            { onOff(settings.requirePin) }) { settings.requirePin = !settings.requirePin; apply() }
+        row(list, "4K mirroring", "Sharper picture from devices that support it. Uses more Wi-Fi",
+            { onOff(settings.allow4k) }) { settings.allow4k = !settings.allow4k; apply() }
+        row(list, "Low-latency mirroring", "The picture follows your device faster. Sound can be a little behind",
+            { onOff(settings.lowLatency) }) { settings.lowLatency = !settings.lowLatency; apply() }
+        row(list, "Remembered devices", "Devices that entered the code. Select to forget them all",
+            { settings.rememberedDevices.size.let { if (it == 0) "None" else "$it" } }) {
+            settings.forgetAllDevices()
+            apply()
+        }
+
         setContentView(ScrollView(this).apply {
-            setBackgroundColor(Color.rgb(16, 18, 22))
+            setBackgroundColor(TvUi.BG)
+            isFillViewport = true
             addView(list)
         })
-        build()
+        nameRow.requestFocus()
     }
 
-    private fun build() {
-        list.removeAllViews()
-        list.addView(TextView(this).apply {
-            text = "AirPlay settings"
-            setTextColor(Color.WHITE)
-            textSize = 30f
-            typeface = Typeface.DEFAULT_BOLD
-        })
-
-        val currentName = settings.name ?: AirPlaySession.state.serverName.ifEmpty { "this TV's name" }
-        addButton("AirPlay name: $currentName") { editName() }
-        addSwitch("Require a PIN for new devices",
-            "A new iPhone or Mac must enter a code shown on the TV once.", settings.requirePin) {
-            settings.requirePin = it
-        }
-        addSwitch("4K mirroring (H.265)",
-            "Sharper mirroring from devices that support it. Uses more Wi-Fi.", settings.allow4k) {
-            settings.allow4k = it
-        }
-        addSwitch("Low-latency mirroring",
-            "Shows the screen as fast as possible; sound may lag behind the picture.", settings.lowLatency) {
-            settings.lowLatency = it
-        }
-        val devices = settings.rememberedDevices
-        addButton(
-            if (devices.isEmpty()) "No remembered devices"
-            else "Forget remembered devices (${devices.values.sorted().joinToString()})",
-        ) {
-            settings.forgetAllDevices()
-            applyChanges()
-        }.isEnabled = devices.isNotEmpty()
+    override fun onResume() {
+        super.onResume()
+        refreshers.forEach { it() }
     }
 
-    private fun addButton(label: String, onClick: () -> Unit): Button {
-        val button = Button(this).apply {
-            text = label
-            isAllCaps = false
-            textSize = 20f
-            gravity = Gravity.START or Gravity.CENTER_VERTICAL
-            setOnClickListener { onClick() }
-        }
-        list.addView(button, rowParams())
-        return button
-    }
+    private fun onOff(value: Boolean) = if (value) "On" else "Off"
 
-    private fun addSwitch(label: String, hint: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-        val row = Switch(this).apply {
-            text = "$label\n$hint"
-            textSize = 20f
-            setTextColor(Color.WHITE)
-            isChecked = checked
-            setPadding(24, 24, 24, 24)
-            isFocusable = true
-            setOnCheckedChangeListener { _, value ->
-                onChange(value)
-                applyChanges()
-            }
+    /** One remote-friendly row: title and description on the left, current value on the right. */
+    private fun row(list: LinearLayout, title: String, hint: String, value: () -> String, onSelect: () -> Unit): LinearLayout {
+        val valueView = TvUi.text(this, 22f, TvUi.ACCENT, bold = true).apply { gravity = Gravity.END }
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TvUi.text(this@SettingsActivity, 22f).apply { text = title })
+            addView(TvUi.text(this@SettingsActivity, 16f, TvUi.TEXT_DIM).apply { text = hint })
         }
-        list.addView(row, rowParams())
+        val row = TvUi.card(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(texts, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(valueView, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(this@SettingsActivity, 24) })
+            setOnClickListener { onSelect() }
+        }, grow = false) as LinearLayout
+        list.addView(row, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(this@SettingsActivity, 16) })
+        refreshers += { valueView.text = value() }
+        valueView.text = value()
+        return row
     }
-
-    private fun rowParams() = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
-        LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (16 * resources.displayMetrics.density).toInt() }
 
     private fun editName() {
         val input = EditText(this).apply {
@@ -106,20 +83,16 @@ class SettingsActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("AirPlay name")
             .setView(input)
-            .setPositiveButton("Save") { _, _ ->
-                settings.name = input.text.toString()
-                applyChanges()
-            }
-            .setNeutralButton("Use TV name") { _, _ ->
-                settings.name = null
-                applyChanges()
-            }
+            .setPositiveButton("Save") { _, _ -> settings.name = input.text.toString(); apply() }
+            .setNeutralButton("Use TV name") { _, _ -> settings.name = null; apply() }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun applyChanges() {
+    /** Restart the receiver so the change takes effect, then refresh the values. */
+    private fun apply() {
         AirPlayService.restart(this)
-        list.postDelayed({ build() }, 300)
+        refreshers.forEach { it() }
+        window.decorView.postDelayed({ refreshers.forEach { it() } }, 500)
     }
 }
