@@ -218,7 +218,7 @@ class AudioPlayer(private val sync: AvSync) {
         // doesn't add latency: what's actually queued does.
         val bufferBytes = maxOf(minBuffer * 2, SAMPLE_RATE * BYTES_PER_FRAME * 3)
         framesWritten = 0
-                return AudioTrack.Builder()
+        return AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
