@@ -124,8 +124,9 @@ class AudioPlayer(private val sync: AvSync) {
                 // Inserted silence only grows the queue and drops never shrink it, so a jittery
                 // sender (iPhone) can settle between MAX_LATE and RESYNC_LATE and lose every
                 // packet. Start over after a run of drops, as for a far-late packet.
-                val stuckLate = error > MAX_LATE_NS && lateRun >= RESYNC_AFTER_DROPS
-                lateRun = if (error > MAX_LATE_NS) lateRun + 1 else 0
+                val maxLateNs = if (lowLatencyTrack) MAX_LATE_NS else MAX_LATE_MUSIC_NS
+                val stuckLate = error > maxLateNs && lateRun >= RESYNC_AFTER_DROPS
+                lateRun = if (error > maxLateNs) lateRun + 1 else 0
                 when {
                     (error > RESYNC_LATE_NS || stuckLate) && queuedFrames(t) > SAMPLE_RATE / 20 -> {
                         lateRun = 0
@@ -136,7 +137,7 @@ class AudioPlayer(private val sync: AvSync) {
                         resetTrack(t)
                         return
                     }
-                    error > (if (lowLatencyTrack) MAX_LATE_NS else MAX_LATE_MUSIC_NS) -> {
+                    error > maxLateNs -> {
                         stats.dropped++
                         return
                     }
